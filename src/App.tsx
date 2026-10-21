@@ -22,6 +22,7 @@ import { DeviceDetail } from '@/components/DeviceDetail';
 import { CompanyForm } from '@/components/CompanyForm';
 import { ClientForm } from '@/components/ClientForm';
 import { MonthlyEntry } from '@/components/MonthlyEntry';
+import { rawReadingValue } from '@/lib/consumption';
 import { SupplierForm } from '@/components/SupplierForm';
 import { SuppliersView } from '@/components/SuppliersView';
 import { ConsumptionReport } from '@/components/ConsumptionReport';
@@ -327,8 +328,9 @@ function AppContent() {
         const prev = i > 0 ? deviceReadings[i - 1] : null;
         return {
           ...r,
-          delta: prev ? r.value - prev.value : null,
-          previousValue: prev ? prev.value : null,
+          value: rawReadingValue(r),
+          delta: prev ? rawReadingValue(r) - rawReadingValue(prev) : null,
+          previousValue: prev ? rawReadingValue(prev) : null,
         };
       });
     },
@@ -519,6 +521,9 @@ function AppContent() {
   };
 
   // Reading CRUD
+  // Показанията се пазят точно както са въведени (value = raw_value).
+  // Изваждането на подуредите се прави при изчисляване на консумацията
+  // (вж. src/lib/consumption.ts): нето = бруто(уред) − Σ бруто(подуреди), всяко със своя коефициент.
   const handleSaveReading = async (data: {
     reading_date: string;
     value: number;
@@ -526,28 +531,17 @@ function AppContent() {
     id?: string;
   }) => {
     if (!selectedDeviceId) return;
-    const depIds = deviceDependencies.filter((d) => d.device_id === selectedDeviceId).map((d) => d.depends_on_device_id);
-
-    let finalValue = data.value;
-    if (depIds.length > 0) {
-      const subtractionSum = depIds.reduce((sum, depId) => {
-        const depReading = readings.find((r) => r.device_id === depId && r.reading_date === data.reading_date);
-        return sum + (depReading?.value ?? 0);
-      }, 0);
-      finalValue = Math.round((data.value - subtractionSum) * 1000) / 1000;
-    }
-
     if (data.id) {
       const { error } = await supabase
         .from('readings')
-        .update({ reading_date: data.reading_date, value: finalValue, raw_value: data.value, note: data.note })
+        .update({ reading_date: data.reading_date, value: data.value, raw_value: data.value, note: data.note })
         .eq('id', data.id);
       if (error) throw error;
     } else {
       const { error } = await supabase.from('readings').insert({
         device_id: selectedDeviceId,
         reading_date: data.reading_date,
-        value: finalValue,
+        value: data.value,
         raw_value: data.value,
         note: data.note,
       });
@@ -556,76 +550,25 @@ function AppContent() {
     setShowReadingForm(false);
     setEditingReading(null);
     await refreshAll();
-
-    // Recalculate dependent devices (devices that depend on this one)
-    const dependents = deviceDependencies.filter((d) => d.depends_on_device_id === selectedDeviceId).map((d) => d.device_id);
-    for (const depId of dependents) {
-      const depExisting = (await supabase.from('readings').select('*').eq('device_id', depId).eq('reading_date', data.reading_date).maybeSingle()).data;
-      if (depExisting && depExisting.raw_value !== null) {
-        const allDepsOfDep = deviceDependencies.filter((d) => d.device_id === depId).map((d) => d.depends_on_device_id);
-        const depSum = allDepsOfDep.reduce((sum, did) => {
-          if (did === selectedDeviceId) return sum + finalValue;
-          const r = readings.find((rr) => rr.device_id === did && rr.reading_date === data.reading_date);
-          return sum + (r?.value ?? 0);
-        }, 0);
-        const newVal = Math.round((depExisting.raw_value - depSum) * 1000) / 1000;
-        await supabase.from('readings').update({ value: newVal }).eq('id', depExisting.id);
-      }
-    }
-    await refreshAll();
   };
 
   // Monthly entry save (inline upsert)
   const handleSaveMonthlyReading = async (deviceId: string, readingDate: string, value: number, note: string | null, existingId?: string) => {
-    const depIds = deviceDependencies.filter((d) => d.device_id === deviceId).map((d) => d.depends_on_device_id);
-
-    // If this device depends on others, compute value = raw - sum of depended_values
-    let finalValue = value;
-    if (depIds.length > 0) {
-      const subtractionSum = depIds.reduce((sum, depId) => {
-        const depReading = readings.find((r) => r.device_id === depId && r.reading_date === readingDate);
-        return sum + (depReading?.value ?? 0);
-      }, 0);
-      finalValue = Math.round((value - subtractionSum) * 1000) / 1000;
-    }
-
     if (existingId && existingId !== 'new') {
       const { error } = await supabase
         .from('readings')
-        .update({ reading_date: readingDate, value: finalValue, raw_value: value, note })
+        .update({ reading_date: readingDate, value, raw_value: value, note })
         .eq('id', existingId);
       if (error) throw error;
     } else {
-      const { error } = await supabase.from('readings').insert({
-        device_id: deviceId,
-        reading_date: readingDate,
-        value: finalValue,
-        raw_value: value,
-        note,
-      });
+      const { error } = await supabase
+        .from('readings')
+        .upsert(
+          { device_id: deviceId, reading_date: readingDate, value, raw_value: value, note },
+          { onConflict: 'device_id,reading_date' },
+        );
       if (error) throw error;
     }
-
-    // After saving, recompute any devices that depend on this one
-    await refreshAll();
-
-    // Recalculate dependent devices' values for this month (devices that depend on this one)
-    const dependents = deviceDependencies.filter((d) => d.depends_on_device_id === deviceId).map((d) => d.device_id);
-    for (const depId of dependents) {
-      const depExisting = readings.find((r) => r.device_id === depId && r.reading_date === readingDate)
-        || (await supabase.from('readings').select('*').eq('device_id', depId).eq('reading_date', readingDate).maybeSingle()).data;
-      if (depExisting && depExisting.raw_value !== null) {
-        const allDepsOfDep = deviceDependencies.filter((d) => d.device_id === depId).map((d) => d.depends_on_device_id);
-        const depSum = allDepsOfDep.reduce((sum, did) => {
-          if (did === deviceId) return sum + finalValue;
-          const r = readings.find((rr) => rr.device_id === did && rr.reading_date === readingDate);
-          return sum + (r?.value ?? 0);
-        }, 0);
-        const newVal = Math.round((depExisting.raw_value - depSum) * 1000) / 1000;
-        await supabase.from('readings').update({ value: newVal }).eq('id', depExisting.id);
-      }
-    }
-
     await refreshAll();
   };
 
@@ -1170,6 +1113,7 @@ function AppContent() {
           <CompensationReport
             devices={devices}
             readings={readings}
+            deviceDependencies={deviceDependencies}
             companies={companies}
             clients={clients}
             deviceClients={deviceClients}
@@ -1204,6 +1148,7 @@ function AppContent() {
           <ConsumptionReport
             devices={devices}
             readings={readings}
+            deviceDependencies={deviceDependencies}
             companies={companies}
             clients={clients}
             deviceClients={deviceClients}

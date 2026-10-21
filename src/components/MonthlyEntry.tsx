@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import type { Device, Reading, Company, Client, DeviceClientWithClient, DeviceDependency, CompanyLocation } from '@/lib/supabase';
 import { Icon } from './Icon';
+import { computeNetConsumptions, rawReadingValue } from '@/lib/consumption';
 
 interface MonthlyEntryProps {
   devices: Device[];
@@ -67,17 +68,13 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
       const currentRow = rows[device.id];
 
       // For dependent devices, show raw_value as previous; for normal devices, show value
-      const prevDisplayValue = prev
-        ? (prev.raw_value !== null && prev.raw_value !== undefined ? prev.raw_value : prev.value)
-        : null;
+      const prevDisplayValue = prev ? rawReadingValue(prev) : null;
 
       // Preserve user edits if the underlying data hasn't changed
       if (currentRow && currentRow.previousValue === prevDisplayValue && currentRow.existingReadingId === (existing?.id ?? null)) {
         newRows[device.id] = currentRow;
       } else {
-        const displayValue = existing?.raw_value !== null && existing?.raw_value !== undefined
-          ? String(existing.raw_value)
-          : existing ? String(existing.value) : '';
+        const displayValue = existing ? String(rawReadingValue(existing)) : '';
         newRows[device.id] = {
           value: displayValue,
           note: existing?.note ?? '',
@@ -117,6 +114,23 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
       return a.created_at.localeCompare(b.created_at);
     });
   }, [devices, filterCompany, filterLocation, filterClient, deviceClients]);
+
+  // Нето консумация за месеца, включително стойностите, които още не са запазени.
+  // нето = (текущо − предишно) × коеф. − Σ (текущо − предишно) × коеф. на изважданите подуреди
+  const netConsumptions = useMemo(() => {
+    const monthDate = `${month}-01`;
+    const typed: Reading[] = [];
+    const overridden = new Set<string>();
+    for (const [deviceId, row] of Object.entries(rows) as [string, RowData][]) {
+      if (!row.dirty || !row.value.trim()) continue;
+      const v = parseFloat(row.value.replace(',', '.'));
+      if (isNaN(v)) continue;
+      overridden.add(deviceId);
+      typed.push({ id: `typed-${deviceId}`, device_id: deviceId, reading_date: monthDate, value: v, raw_value: v, note: null, created_at: '' });
+    }
+    const merged = readings.filter((r) => !(r.reading_date === monthDate && overridden.has(r.device_id))).concat(typed);
+    return computeNetConsumptions(devices, merged, deviceDependencies, monthDate);
+  }, [rows, readings, devices, deviceDependencies, month]);
 
   const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const pendingFocusRef = useRef<string | null>(null);
@@ -342,30 +356,14 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
                     const row = rows[device.id];
                     if (!row) return null;
 
-                    const numValue = parseFloat(row.value.replace(',', '.')) || 0;
                     const depIds = deviceDependencies.filter((d) => d.device_id === device.id).map((d) => d.depends_on_device_id);
                     const depDevices = depIds.map((id) => devices.find((d) => d.id === id)).filter((d): d is Device => !!d);
-                    const depSum = depIds.reduce((sum, depId) => {
-                      const depReading = readings.find((r) => r.device_id === depId && r.reading_date === `${month}-01`);
-                      return sum + (depReading?.value ?? 0);
-                    }, 0);
-                    const computedValue = depIds.length > 0 && row.value.trim()
-                      ? Math.round((numValue - depSum) * 1000) / 1000
-                      : null;
-                    const prevDepSum = depIds.length > 0 && row.previousValue !== null
-                      ? (() => {
-                          let sum = 0;
-                          for (const depId of depIds) {
-                            const prevDepReading = readings.find((r) => r.device_id === depId && r.reading_date === row.previousDate);
-                            if (prevDepReading) sum += prevDepReading.value;
-                          }
-                          return sum;
-                        })()
-                      : null;
-                    const consumption = depIds.length > 0
-                      ? (computedValue !== null && prevDepSum !== null ? Math.round((computedValue - (row.previousValue! - prevDepSum)) * 1000) / 1000 : null)
-                      : (row.previousValue !== null && row.value.trim() ? numValue - row.previousValue : null);
-                    const coefConsumption = consumption !== null ? consumption * device.coefficient : null;
+                    const net = netConsumptions.get(device.id) ?? null;
+                    // показваме разликата в показанията (без коеф.) и консумацията с коеф./нето
+                    const consumption = net !== null && device.coefficient ? Math.round((net.gross / device.coefficient) * 1000) / 1000 : null;
+                    const coefConsumption = net !== null ? net.gross : null;
+                    const computedValue = net !== null && depIds.length > 0 ? net.net : null;
+                    const allocatable = net !== null ? net.net : null;
                     const dcs = getDeviceClients(device.id);
                     const compName = companyName(device.company_id);
                     const isSaving = saving[device.id];
@@ -439,14 +437,17 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
                                     с коеф.: {formatValue(coefConsumption)}
                                   </span>
                                 )}
-                                {computedValue !== null && (
+                                {computedValue !== null && net !== null && (
                                   <span className="block text-xs text-sky-500">
-                                    изчислено: {formatValue(computedValue)}
+                                    нето: {formatValue(computedValue)} (− {formatValue(net.subtracted)})
+                                  </span>
+                                )}
+                                {net !== null && net.missingSubDevices.length > 0 && (
+                                  <span className="block text-xs text-amber-600">
+                                    липсва показание: {net.missingSubDevices.map((d) => d.name).join(', ')}
                                   </span>
                                 )}
                               </div>
-                            ) : computedValue !== null ? (
-                              <span className="text-xs text-sky-500">= {formatValue(computedValue)}</span>
                             ) : (
                               <span className="text-slate-300">—</span>
                             )}
@@ -477,13 +478,13 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
                         </tr>
 
                         {/* Client allocation breakdown row */}
-                        {dcs.length > 0 && consumption !== null && (
+                        {dcs.length > 0 && allocatable !== null && (
                           <tr key={`${device.id}-clients`} className="bg-slate-50/30">
                             <td colSpan={5} className="px-4 py-2.5">
                               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pl-5">
                                 <span className="text-xs font-medium text-slate-400">Разпределение:</span>
                                 {dcs.map((dc) => {
-                                  const share = consumption * (dc.percentage / 100) * device.coefficient;
+                                  const share = allocatable * (dc.percentage / 100);
                                   return (
                                     <span key={dc.id} className="text-xs text-slate-600">
                                       {dc.client.name}: <span className="font-medium text-slate-700">{formatValue(share)} {device.unit}</span>
