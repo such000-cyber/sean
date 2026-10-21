@@ -1,5 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import type { Device, Reading, Company, Client, DeviceClientWithClient, DeviceDependency, CompanyLocation } from '@/lib/supabase';
+import * as XLSX from 'xlsx';
+import type { Device, Reading, Company, Client, DeviceClientWithClient, DeviceDependency, CompanyLocation, DeviceType } from '@/lib/supabase';
+import { DEVICE_TYPE_LABELS } from '@/lib/supabase';
 import { Icon } from './Icon';
 import { computeNetConsumptions, rawReadingValue } from '@/lib/consumption';
 
@@ -222,6 +224,66 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
   const dirtyCount = Object.values(rows).filter((r) => r.dirty && r.value.trim()).length;
   const filledCount = Object.values(rows).filter((r) => r.value.trim()).length;
 
+  const handleExportExcel = () => {
+    if (filteredDevices.length === 0) return;
+
+    const header = [
+      'Уред', 'Тип', 'Мерна единица', 'Номер', 'Коефициент',
+      'Предишно показание', 'Текущо показание',
+      'Разлика', 'Потребление (с коеф.)', 'Нето потребление',
+      'Клиенти', 'Бележка',
+    ];
+
+    const dataRows: (string | number)[][] = [header];
+
+    for (const device of filteredDevices) {
+      const row = rows[device.id];
+      if (!row) continue;
+
+      const depIds = deviceDependencies.filter((d) => d.device_id === device.id).map((d) => d.depends_on_device_id);
+      const net = netConsumptions.get(device.id) ?? null;
+      const currentValue = row.value.trim() ? parseFloat(row.value.replace(',', '.')) : null;
+      const prevValue = row.previousValue;
+      const delta = currentValue !== null && prevValue !== null ? currentValue - prevValue : null;
+      const grossConsumption = net !== null ? net.gross : null;
+      const netConsumption = net !== null ? net.net : null;
+      const dcs = getDeviceClients(device.id);
+      const clientsStr = dcs.length > 0
+        ? dcs.map((dc) => `${dc.client.name} (${dc.percentage}%)`).join(', ')
+        : '';
+
+      dataRows.push([
+        device.name,
+        DEVICE_TYPE_LABELS[device.type as DeviceType] ?? device.type,
+        device.unit,
+        device.number ?? '',
+        Number(device.coefficient),
+        prevValue ?? '',
+        currentValue ?? '',
+        delta !== null ? Math.round(delta * 1000) / 1000 : '',
+        grossConsumption ?? '',
+        netConsumption ?? '',
+        clientsStr,
+        row.note ?? '',
+      ]);
+    }
+
+    const ws = XLSX.utils.aoa_to_sheet(dataRows);
+    ws['!cols'] = header.map((h) => ({ wch: Math.max(h.length + 2, 14) }));
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Показания');
+
+    const locName = filterLocation
+      ? locations.find((l) => l.id === filterLocation)?.name ?? ''
+      : 'Всички_локации';
+    const compName = filterCompany
+      ? companies.find((c) => c.id === filterCompany)?.name ?? ''
+      : 'Всички_фирми';
+    const fileName = `Показания_${compName}_${locName}_${month}.xlsx`;
+    XLSX.writeFile(wb, fileName);
+  };
+
   const getDeviceClients = (deviceId: string) => deviceClients.filter((dc) => dc.device_id === deviceId);
 
   const companyName = (companyId: string | null) => {
@@ -300,6 +362,14 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
               className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 transition-colors focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100"
             />
           </div>
+          <button
+            onClick={handleExportExcel}
+            disabled={filteredDevices.length === 0}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-all hover:bg-slate-50 disabled:opacity-40"
+          >
+            <Icon name="Download" size={16} />
+            <span className="hidden sm:inline">Експорт в Excel</span>
+          </button>
         </div>
       </div>
 
