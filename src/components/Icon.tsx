@@ -1,0 +1,100 @@
+import {
+  Zap,
+  Droplets,
+  Flame,
+  Thermometer,
+  Gauge,
+  Plus,
+  Trash2,
+  Edit3,
+  X,
+  TrendingUp,
+  TrendingDown,
+  Calendar,
+  MapPin,
+  Hash,
+  ChevronRight,
+  BarChart3,
+  ArrowLeft,
+  Save,
+  AlertCircle,
+  Search,
+  FileText,
+  Lightbulb,
+  Building2,
+  Users,
+  UserPlus,
+  PieChart,
+  Phone,
+  Mail,
+  Check,
+  Download,
+  Printer,
+  Info,
+  AlertTriangle,
+  Sigma,
+  ChevronDown,
+  Receipt,
+  Settings,
+  Euro,
+} from 'lucide-react';
+import type { ComponentType } from 'react';
+
+type IconProps = { className?: string; size?: number | string; strokeWidth?: number | string };
+
+const iconMap: Record<string, ComponentType<IconProps>> = {
+  Zap,
+  Droplets,
+  Flame,
+  Thermometer,
+  Gauge,
+  Plus,
+  Trash2,
+  Edit3,
+  X,
+  TrendingUp,
+  TrendingDown,
+  Calendar,
+  Meter: Gauge,
+  MapPin,
+  Hash,
+  ChevronRight,
+  BarChart3,
+  ArrowLeft,
+  Save,
+  AlertCircle,
+  Search,
+  FileText,
+  Lightbulb,
+  Building2,
+  Users,
+  UserPlus,
+  PieChart,
+  Phone,
+  Mail,
+  Check,
+  Download,
+  Printer,
+  Info,
+  AlertTriangle,
+  Sigma,
+  ChevronDown,
+  Receipt,
+  Settings,
+  Euro,
+};
+
+export function Icon({
+  name,
+  className,
+  size,
+  strokeWidth,
+}: {
+  name: string;
+  className?: string;
+  size?: number | string;
+  strokeWidth?: number | string;
+}) {
+  const Cmp = iconMap[name] ?? Gauge;
+  return <Cmp className={className} size={size} strokeWidth={strokeWidth} />;
+}
