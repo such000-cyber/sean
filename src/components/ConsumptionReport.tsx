@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import type { Device, Reading, Company, Client, DeviceClientWithClient, SupplierInvoice, Supplier, DeviceType, CompanyLocation, DeviceDependency } from '@/lib/supabase';
-import { computeNetConsumptions } from '@/lib/consumption';
+import { computeNetConsumptions, type NetConsumption } from '@/lib/consumption';
 import { DEVICE_TYPE_LABELS, DEVICE_TYPE_ICONS, SERVICE_TYPE_LABELS } from '@/lib/supabase';
 import { Icon } from './Icon';
 
@@ -225,7 +225,7 @@ export function ConsumptionReport({
   //   => коефициент = доставени kWh (по фактура) / Σ нето kWh − 1
   // Σ нето kWh = сборът на „контролните“ уреди, защото нето на главния + подуредите = бруто на главния.
   // Ключ: "<companyId>|<locationId>" (същият като за цените).
-  const electricityLossCoefficients = useMemo(() => {
+  const electricityLoss = useMemo(() => {
     const delivered: Record<string, number> = {};
     // количеството се взима веднъж на група (мрежа + доставка фактурират едни и същи kWh)
     const seenQty = new Set<string>();
@@ -250,21 +250,42 @@ export function ConsumptionReport({
       const c = consumed[key] ?? 0;
       result[key] = d > 0 && c > 0 ? d / c - 1 : 0;
     }
-    return result;
+    return { coefficients: result, delivered, consumed };
   }, [locationFilteredInvoices, suppliers, month, netConsumptions]);
 
-  // For display: show the coefficient for the selected company (or max if all)
-  const electricityLossCoefficient = useMemo(() => {
-    const vals = Object.entries(electricityLossCoefficients)
-      .filter(([key]) => {
+  const electricityLossCoefficients = electricityLoss.coefficients;
+
+  // Проверка по абонат: доставени kWh по фактура срещу сбор нето kWh от уредите.
+  // Ако уредите са повече от фактурата, най-често на някой главен уред липсват подуредите,
+  // които трябва да изважда, и консумацията се брои два пъти.
+  const electricityCheckRows = useMemo(() => {
+    return Object.keys(electricityLoss.delivered)
+      .filter((key) => {
         const [compId, locId] = key.split('|');
         if (selectedCompanyId !== 'all' && compId !== selectedCompanyId) return false;
         if (selectedLocationId !== 'all' && locId !== selectedLocationId) return false;
         return true;
       })
-      .map(([, v]) => v);
-    return vals.length > 0 ? Math.max(...vals) : 0;
-  }, [electricityLossCoefficients, selectedCompanyId, selectedLocationId]);
+      .map((key) => {
+        const [compId, locId] = key.split('|');
+        const delivered = electricityLoss.delivered[key];
+        const consumed = electricityLoss.consumed[key] ?? 0;
+        const company = companies.find((c) => c.id === compId);
+        const location = locations.find((l) => l.id === locId);
+        const negatives = (Array.from(netConsumptions.values()) as NetConsumption[]).filter(
+          (n) => n.device.type === 'electricity' && `${n.device.company_id ?? 'null'}|${n.device.location_id ?? 'null'}` === key && n.net < 0,
+        );
+        return {
+          key,
+          label: [company?.name, location?.name].filter(Boolean).join(' · ') || 'Без фирма',
+          delivered,
+          consumed,
+          lossPct: consumed > 0 ? (delivered / consumed - 1) * 100 : 0,
+          negatives,
+        };
+      });
+  }, [electricityLoss, selectedCompanyId, selectedLocationId, companies, locations, netConsumptions]);
+
 
   // Build report grouped by client
   const reportData = useMemo(() => {
@@ -313,7 +334,7 @@ export function ConsumptionReport({
         device,
         consumption: clientShare,
         unit: consumptionData.unit,
-        unitPrice,
+        unitPrice: isElectricityDevice ? unitPrice * (1 + deviceLossCoeff) : unitPrice,
         amount: finalAmount,
       });
 
@@ -598,14 +619,40 @@ export function ConsumptionReport({
         </div>
       )}
 
-      {/* Electricity loss coefficient info */}
-      {hasData && electricityLossCoefficient !== 0 && (
-        <div className="mb-6 flex items-start gap-3 rounded-xl border border-amber-100 bg-amber-50/40 px-4 py-3.5">
-          <Icon name="Zap" size={18} className="mt-0.5 shrink-0 text-amber-500" />
-          <p className="text-sm text-amber-800">
-            Коефициент за загуби на електроенергия: <span className="font-bold">{(electricityLossCoefficient * 100).toFixed(5)}%</span>
-            {' '}— сумите за електроенергия са увеличени с този коефициент, за да покрият разликата между доставените и потребените киловатчаса. Изчислява се отделно за всеки абонат (фирма + локация): коефициент = доставени kWh по фактура / сбор нето kWh на уредите − 1.
-          </p>
+      {/* Проверка на тока по абонат */}
+      {hasData && electricityCheckRows.length > 0 && (
+        <div className="mb-6 space-y-2">
+          {electricityCheckRows.map((row) => {
+            const bad = row.consumed > row.delivered;
+            return (
+              <div
+                key={row.key}
+                className={`flex items-start gap-3 rounded-xl border px-4 py-3.5 ${bad ? 'border-red-200 bg-red-50/60' : 'border-amber-100 bg-amber-50/40'}`}
+              >
+                <Icon name={bad ? 'AlertTriangle' : 'Zap'} size={18} className={`mt-0.5 shrink-0 ${bad ? 'text-red-500' : 'text-amber-500'}`} />
+                <div className={`text-sm ${bad ? 'text-red-800' : 'text-amber-800'}`}>
+                  <p>
+                    <span className="font-semibold">Ток – {row.label}:</span> по фактура {formatValue(row.delivered)} kWh,
+                    {' '}сбор от уредите {formatValue(Math.round(row.consumed))} kWh,
+                    {' '}загуби <span className="font-bold">{row.lossPct.toFixed(2)}%</span>
+                    {' '}(цената за kWh се увеличава/намалява с толкова, за да се покрие фактурата).
+                  </p>
+                  {bad && (
+                    <p className="mt-1">
+                      Уредите показват с {formatValue(Math.round(row.consumed - row.delivered))} kWh повече от фактурата.
+                      {' '}Най-вероятно на някой главен уред не са зададени подуредите, които трябва да изважда, и консумацията се брои два пъти.
+                      {' '}Проверете полето „Изважда“ на главните уреди.
+                    </p>
+                  )}
+                  {row.negatives.length > 0 && (
+                    <p className="mt-1">
+                      Отрицателно нето (подуредите са повече от главния): {row.negatives.map((n) => `${n.device.name} (${formatValue(n.net)})`).join(', ')}.
+                    </p>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
