@@ -13,7 +13,10 @@ import {
   type SupplierInvoice,
   type ServiceType,
 } from '@/lib/supabase';
+import * as XLSX from 'xlsx';
 import { useAuth } from '@/lib/auth';
+import { computeNetConsumptions, rawReadingValue } from '@/lib/consumption';
+import { DEVICE_TYPE_LABELS } from '@/lib/supabase';
 import { Icon } from '@/components/Icon';
 import { DeviceCard } from '@/components/DeviceCard';
 import { DeviceForm } from '@/components/DeviceForm';
@@ -22,7 +25,6 @@ import { DeviceDetail } from '@/components/DeviceDetail';
 import { CompanyForm } from '@/components/CompanyForm';
 import { ClientForm } from '@/components/ClientForm';
 import { MonthlyEntry } from '@/components/MonthlyEntry';
-import { rawReadingValue } from '@/lib/consumption';
 import { SupplierForm } from '@/components/SupplierForm';
 import { SuppliersView } from '@/components/SuppliersView';
 import { ConsumptionReport } from '@/components/ConsumptionReport';
@@ -685,6 +687,74 @@ function AppContent() {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   }, []);
+  const [exportMonth, setExportMonth] = useState<string>(currentMonth);
+
+  const exportNetConsumptions = useMemo(
+    () => computeNetConsumptions(devices, readings, deviceDependencies, `${exportMonth}-01`),
+    [devices, readings, deviceDependencies, exportMonth],
+  );
+
+  const handleExportDevicesExcel = () => {
+    if (filteredDevices.length === 0) return;
+
+    const header = [
+      'Уред', 'Тип', 'Мерна единица', 'Номер', 'Инв. номер', 'Коефициент',
+      'Предишно показание', 'Текущо показание',
+      'Разлика', 'Потребление (с коеф.)', 'Нето потребление',
+      'Клиенти', 'Бележка',
+    ];
+
+    const dataRows: (string | number)[][] = [header];
+
+    for (const device of filteredDevices) {
+      const net = exportNetConsumptions.get(device.id) ?? null;
+      const prev = [...readings]
+        .filter((r) => r.device_id === device.id && r.reading_date < `${exportMonth}-01`)
+        .sort((a, b) => a.reading_date.localeCompare(b.reading_date))
+        .pop() ?? null;
+      const current = readings.find((r) => r.device_id === device.id && r.reading_date === `${exportMonth}-01`) ?? null;
+      const prevValue = prev ? rawReadingValue(prev) : null;
+      const currentValue = current ? rawReadingValue(current) : null;
+      const delta = currentValue !== null && prevValue !== null ? currentValue - prevValue : null;
+      const grossConsumption = net !== null ? net.gross : null;
+      const netConsumption = net !== null ? net.net : null;
+      const dcs = deviceClients.filter((dc) => dc.device_id === device.id);
+      const clientsStr = dcs.length > 0
+        ? dcs.map((dc) => `${dc.client.name} (${dc.percentage}%)`).join(', ')
+        : '';
+
+      dataRows.push([
+        device.name,
+        DEVICE_TYPE_LABELS[device.type] ?? device.type,
+        device.unit,
+        device.number ?? '',
+        device.inventory_number ?? '',
+        Number(device.coefficient),
+        prevValue ?? '',
+        currentValue ?? '',
+        delta !== null ? Math.round(delta * 1000) / 1000 : '',
+        grossConsumption ?? '',
+        netConsumption ?? '',
+        clientsStr,
+        current?.note ?? '',
+      ]);
+    }
+
+    const ws = XLSX.utils.aoa_to_sheet(dataRows);
+    ws['!cols'] = header.map((h) => ({ wch: Math.max(h.length + 2, 14) }));
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Показания');
+
+    const locName = selectedLocationId !== 'all'
+      ? locations.find((l) => l.id === selectedLocationId)?.name ?? ''
+      : 'Всички_локации';
+    const compName = effectiveCompanyId !== 'all'
+      ? companies.find((c) => c.id === effectiveCompanyId)?.name ?? ''
+      : 'Всички_фирми';
+    const fileName = `Показания_${compName}_${locName}_${exportMonth}.xlsx`;
+    XLSX.writeFile(wb, fileName);
+  };
 
   // Company detail view
   if (showCompanyDetail) {
@@ -1395,6 +1465,23 @@ function AppContent() {
                   </div>
                 );
               })()}
+              {filteredDevices.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="month"
+                    value={exportMonth}
+                    onChange={(e) => setExportMonth(e.target.value)}
+                    className="rounded-lg border border-slate-200 px-3 py-2.5 text-sm font-medium text-slate-700 transition-colors focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100"
+                  />
+                  <button
+                    onClick={handleExportDevicesExcel}
+                    className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-600 shadow-sm transition-all hover:bg-slate-50"
+                  >
+                    <Icon name="Download" size={16} />
+                    <span className="hidden sm:inline">Експорт в Excel</span>
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
