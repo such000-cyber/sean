@@ -1,12 +1,14 @@
 import { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
-import type { Device, Reading, Company, Client, DeviceClientWithClient, SupplierInvoice, Supplier, DeviceType, CompanyLocation } from '@/lib/supabase';
+import type { Device, Reading, Company, Client, DeviceClientWithClient, SupplierInvoice, Supplier, DeviceType, CompanyLocation, DeviceDependency } from '@/lib/supabase';
+import { computeNetConsumptions } from '@/lib/consumption';
 import { DEVICE_TYPE_LABELS, DEVICE_TYPE_ICONS, SERVICE_TYPE_LABELS } from '@/lib/supabase';
 import { Icon } from './Icon';
 
 interface ConsumptionReportProps {
   devices: Device[];
   readings: Reading[];
+  deviceDependencies: DeviceDependency[];
   companies: Company[];
   clients: Client[];
   deviceClients: DeviceClientWithClient[];
@@ -87,6 +89,7 @@ interface ClientConsumption {
 export function ConsumptionReport({
   devices,
   readings,
+  deviceDependencies,
   companies,
   clients,
   deviceClients,
@@ -198,76 +201,70 @@ export function ConsumptionReport({
     [devicesForReport]
   );
 
-  // Compute consumption per device for the selected month
+  // Нето консумация за ВСИЧКИ уреди за месеца (нужна е и за загубите по абонат,
+  // независимо от филтрите). Нето = бруто − Σ бруто на изважданите подуреди.
+  const netConsumptions = useMemo(
+    () => computeNetConsumptions(devices, readings, deviceDependencies, `${month}-01`),
+    [devices, readings, deviceDependencies, month],
+  );
+
   const deviceConsumptions = useMemo(() => {
     const result: Record<string, { consumption: number; unit: string } | null> = {};
-    const monthDate = `${month}-01`;
-
     for (const device of devicesForReport) {
-      const deviceReadings = readings
-        .filter((r) => r.device_id === device.id)
-        .sort((a, b) => a.reading_date.localeCompare(b.reading_date));
-
-      const currentReading = deviceReadings.find((r) => r.reading_date === monthDate);
-      const prevReading = deviceReadings.filter((r) => r.reading_date < monthDate).pop() ?? null;
-
-      if (currentReading && prevReading) {
-        const rawConsumption = currentReading.value - prevReading.value;
-        const consumption = rawConsumption * device.coefficient;
-        result[device.id] = { consumption, unit: device.unit };
-      } else {
-        result[device.id] = null;
-      }
+      const n = netConsumptions.get(device.id);
+      result[device.id] = n ? { consumption: n.net, unit: device.unit } : null;
     }
     return result;
-  }, [devicesForReport, readings, month]);
+  }, [devicesForReport, netConsumptions]);
 
   // For non-base water devices, the price comes from supplier invoices (same as electricity).
   // Base devices get their price from the manual input; non-base devices use the invoice-derived price.
 
-  // Electricity loss coefficient per company: (delivered kWh - consumed kWh) / delivered kWh
-  // Delivered kWh comes from the supplier invoice quantity for electricity within a company;
-  // consumed kWh is the total consumption across all electricity devices for that company.
-  // Returns a map: companyId -> coefficient. Key 'null' is for devices with no company.
+  // Коефициент на загубите за ток по абонат (фирма + локация), както в Excel:
+  //   цена със загуби = сума по фактури / Σ нето kWh на всички уреди на абоната
+  //   => коефициент = доставени kWh (по фактура) / Σ нето kWh − 1
+  // Σ нето kWh = сборът на „контролните“ уреди, защото нето на главния + подуредите = бруто на главния.
+  // Ключ: "<companyId>|<locationId>" (същият като за цените).
   const electricityLossCoefficients = useMemo(() => {
-    const result: Record<string, number> = {};
-    const companyIds = new Set<string>();
-    for (const device of devicesForReport) companyIds.add(device.company_id ?? 'null');
-    for (const supplier of suppliers) {
-      if (supplier.service_type === 'electricity') companyIds.add(supplier.company_id ?? 'null');
+    const delivered: Record<string, number> = {};
+    // количеството се взима веднъж на група (мрежа + доставка фактурират едни и същи kWh)
+    const seenQty = new Set<string>();
+    for (const inv of locationFilteredInvoices) {
+      if (inv.service_month !== month) continue;
+      const supplier = suppliers.find((s) => s.id === inv.supplier_id);
+      if (!supplier || supplier.service_type !== 'electricity') continue;
+      const key = `${supplier.company_id ?? 'null'}|${supplier.location_id ?? 'null'}`;
+      if (seenQty.has(key)) continue;
+      seenQty.add(key);
+      delivered[key] = Number(inv.quantity);
     }
-    for (const compId of companyIds) {
-      const electricityInvoice = Object.values(locationFilteredInvoices).find((inv) => {
-        if (inv.service_month !== month) return false;
-        const supplier = suppliers.find((s) => s.id === inv.supplier_id);
-        if (!supplier) return false;
-        if (DEVICE_TYPE_TO_SERVICE[supplier.service_type as DeviceType] !== 'electricity') return false;
-        return (supplier.company_id ?? 'null') === compId;
-      });
-      const deliveredQty = electricityInvoice ? Number(electricityInvoice.quantity) : 0;
-      let consumedKwh = 0;
-      for (const device of devicesForReport) {
-        if (device.type !== 'electricity') continue;
-        if ((device.company_id ?? 'null') !== compId) continue;
-        const data = deviceConsumptions[device.id];
-        if (!data || data.consumption <= 0) continue;
-        consumedKwh += data.consumption;
-      }
-      if (deliveredQty <= 0 || consumedKwh <= 0) { result[compId] = 0; continue; }
-      const loss = deliveredQty - consumedKwh;
-      result[compId] = loss > 0 ? loss / consumedKwh : 0;
+    const consumed: Record<string, number> = {};
+    for (const n of netConsumptions.values()) {
+      if (n.device.type !== 'electricity') continue;
+      const key = `${n.device.company_id ?? 'null'}|${n.device.location_id ?? 'null'}`;
+      consumed[key] = (consumed[key] ?? 0) + n.net;
+    }
+    const result: Record<string, number> = {};
+    for (const key of Object.keys(delivered)) {
+      const d = delivered[key];
+      const c = consumed[key] ?? 0;
+      result[key] = d > 0 && c > 0 ? d / c - 1 : 0;
     }
     return result;
-  }, [locationFilteredInvoices, suppliers, month, devicesForReport, deviceConsumptions]);
+  }, [locationFilteredInvoices, suppliers, month, netConsumptions]);
 
   // For display: show the coefficient for the selected company (or max if all)
   const electricityLossCoefficient = useMemo(() => {
-    if (selectedCompanyId !== 'all') {
-      return electricityLossCoefficients[selectedCompanyId] ?? 0;
-    }
-    const vals = Object.values(electricityLossCoefficients);
+    const vals = Object.entries(electricityLossCoefficients)
+      .filter(([key]) => {
+        const [compId, locId] = key.split('|');
+        if (selectedCompanyId !== 'all' && compId !== selectedCompanyId) return false;
+        if (selectedLocationId !== 'all' && locId !== selectedLocationId) return false;
+        return true;
+      })
+      .map(([, v]) => v);
     return vals.length > 0 ? Math.max(...vals) : 0;
-  }, [electricityLossCoefficients, selectedCompanyId]);
+  }, [electricityLossCoefficients, selectedCompanyId, selectedLocationId]);
 
   // Build report grouped by client
   const reportData = useMemo(() => {
@@ -294,7 +291,7 @@ export function ConsumptionReport({
       if (!device) continue;
 
       const consumptionData = deviceConsumptions[device.id];
-      if (!consumptionData || consumptionData.consumption <= 0) continue;
+      if (!consumptionData || consumptionData.consumption === 0) continue;
 
       const clientShare = consumptionData.consumption * (dc.percentage / 100);
       const serviceKey = DEVICE_TYPE_TO_SERVICE[device.type];
@@ -309,7 +306,7 @@ export function ConsumptionReport({
       }
       const amount = clientShare * unitPrice;
       const isElectricityDevice = device.type === 'electricity';
-      const deviceLossCoeff = electricityLossCoefficients[device.company_id ?? 'null'] ?? 0;
+      const deviceLossCoeff = electricityLossCoefficients[`${device.company_id ?? 'null'}|${device.location_id ?? 'null'}`] ?? 0;
       const finalAmount = isElectricityDevice ? amount * (1 + deviceLossCoeff) : amount;
 
       clientEntry.devices.push({
@@ -602,12 +599,12 @@ export function ConsumptionReport({
       )}
 
       {/* Electricity loss coefficient info */}
-      {hasData && electricityLossCoefficient > 0 && (
+      {hasData && electricityLossCoefficient !== 0 && (
         <div className="mb-6 flex items-start gap-3 rounded-xl border border-amber-100 bg-amber-50/40 px-4 py-3.5">
           <Icon name="Zap" size={18} className="mt-0.5 shrink-0 text-amber-500" />
           <p className="text-sm text-amber-800">
             Коефициент за загуби на електроенергия: <span className="font-bold">{(electricityLossCoefficient * 100).toFixed(5)}%</span>
-            {' '}— сумите за електроенергия са увеличени с този коефициент, за да покрият разликата между доставените и потребените киловатчаса. (Коефициент = (доставени - потребени) / потребени)
+            {' '}— сумите за електроенергия са увеличени с този коефициент, за да покрият разликата между доставените и потребените киловатчаса. Изчислява се отделно за всеки абонат (фирма + локация): коефициент = доставени kWh по фактура / сбор нето kWh на уредите − 1.
           </p>
         </div>
       )}

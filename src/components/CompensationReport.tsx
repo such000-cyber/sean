@@ -1,11 +1,13 @@
 import { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
-import type { Device, Reading, Company, Client, DeviceClientWithClient, CompanyLocation } from '@/lib/supabase';
+import type { Device, Reading, Company, Client, DeviceClientWithClient, CompanyLocation, DeviceDependency } from '@/lib/supabase';
+import { computeNetConsumptions } from '@/lib/consumption';
 import { Icon } from './Icon';
 
 interface CompensationReportProps {
   devices: Device[];
   readings: Reading[];
+  deviceDependencies: DeviceDependency[];
   companies: Company[];
   clients: Client[];
   deviceClients: DeviceClientWithClient[];
@@ -81,6 +83,7 @@ interface ClientCompensationRow {
 export function CompensationReport({
   devices,
   readings,
+  deviceDependencies,
   companies,
   clients,
   deviceClients,
@@ -125,24 +128,13 @@ export function CompensationReport({
       ? relevantDevices
       : relevantDevices.filter((d) => d.location_id === selectedLocationId);
 
+    const nets = computeNetConsumptions(devices, readings, deviceDependencies, monthDate);
     for (const device of locationFiltered) {
-      const deviceReadings = readings
-        .filter((r) => r.device_id === device.id)
-        .sort((a, b) => a.reading_date.localeCompare(b.reading_date));
-
-      const currentReading = deviceReadings.find((r) => r.reading_date === monthDate);
-      const prevReading = deviceReadings.filter((r) => r.reading_date < monthDate).pop() ?? null;
-
-      if (currentReading && prevReading) {
-        const rawConsumption = currentReading.value - prevReading.value;
-        const consumption = rawConsumption * device.coefficient;
-        result[device.id] = { device, consumption, unit: device.unit };
-      } else {
-        result[device.id] = null;
-      }
+      const n = nets.get(device.id);
+      result[device.id] = n ? { device, consumption: n.net, unit: device.unit } : null;
     }
     return result;
-  }, [devices, readings, month, selectedCompanyId, selectedLocationId]);
+  }, [devices, readings, deviceDependencies, month, selectedCompanyId, selectedLocationId]);
 
   // Total kWh consumed per company (sum of all electricity devices in that company)
   const totalKwhByCompany = useMemo(() => {
