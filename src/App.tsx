@@ -25,6 +25,7 @@ import { DeviceDetail } from '@/components/DeviceDetail';
 import { CompanyForm } from '@/components/CompanyForm';
 import { ClientForm } from '@/components/ClientForm';
 import { MonthlyEntry } from '@/components/MonthlyEntry';
+import { ExcelConfigPanel } from '@/components/ExcelConfigPanel';
 import { SupplierForm } from '@/components/SupplierForm';
 import { SuppliersView } from '@/components/SuppliersView';
 import { ConsumptionReport } from '@/components/ConsumptionReport';
@@ -33,7 +34,7 @@ import { LoginPage } from '@/components/LoginPage';
 import { UserManagementPanel } from '@/components/UserManagementPanel';
 import { HelpPage } from '@/components/HelpPage';
 
-type View = 'dashboard' | 'detail' | 'monthly' | 'suppliers' | 'report' | 'compensation' | 'users' | 'help';
+type View = 'dashboard' | 'detail' | 'monthly' | 'suppliers' | 'report' | 'compensation' | 'users' | 'help' | 'excelcfg';
 
 export default function App() {
   const { session, profile, loading: authLoading } = useAuth();
@@ -1060,6 +1061,30 @@ function AppContent() {
     );
   }
 
+  // Настройки от Excel (admin only)
+  if (view === 'excelcfg' && isAdmin) {
+    return (
+      <div className="min-h-screen bg-slate-50">
+        <Header
+          onAddDevice={() => { setEditingDevice(null); setShowDeviceForm(true); }}
+          showAddDevice={isAdmin}
+          userInfo={headerUserInfo}
+          onLogout={handleLogout}
+        />
+        <main className="px-4 py-6 sm:px-6 lg:px-8">
+          <ExcelConfigPanel
+            devices={devices}
+            clients={clients}
+            deviceDependencies={deviceDependencies}
+            deviceClients={deviceClients}
+            onDone={refreshAll}
+            onBack={() => setView('dashboard')}
+          />
+        </main>
+      </div>
+    );
+  }
+
   // Users view (admin only)
   if (view === 'users' && isAdmin) {
     return (
@@ -1317,6 +1342,16 @@ function AppContent() {
               >
                 <Icon name="Users" size={16} />
                 <span className="hidden sm:inline">Потребители</span>
+              </button>
+            )}
+            {isAdmin && (
+              <button
+                onClick={() => setView('excelcfg')}
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-all hover:bg-slate-50"
+                title="Зависимости и проценти според месечния Excel"
+              >
+                <Icon name="Settings" size={16} />
+                <span className="hidden sm:inline">Настройки от Excel</span>
               </button>
             )}
             {isAdmin && (
