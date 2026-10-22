@@ -12,8 +12,10 @@ export interface ManualDeviceConfig {
   name: string;
   /** от този уред се копират фирма, локация, тип и мерна единица */
   likeDevice: DeviceRef;
-  /** потребление за месеца */
-  value: number;
+  /** потребление за месеца (за ръчен уред без брояч) */
+  value?: number;
+  /** показания по месеци (YYYY-MM-01 → показание) – за нов уред с брояч, напр. главен водомер */
+  meterReadings?: Record<string, number>;
   clients: { name: string; percentage: number }[];
   note: string;
 }
@@ -32,7 +34,7 @@ export interface ExcelConfigItem {
 
 export const EXCEL_CONFIG_MONTH = '2026-09-01';
 
-/** Ръчни уреди (фиксирани количества от Excel). Изискват миграцията за is_manual. */
+/** Нови уреди: ръчни (фиксирани количества, без брояч) или с брояч и показания. Ръчните изискват миграцията за is_manual. */
 export const EXCEL_MANUAL_DEVICES_09_2026: ManualDeviceConfig[] = [
   {
     "name": "Сграда 34 - Чилър КНС (ръчно)",
@@ -103,6 +105,54 @@ export const EXCEL_MANUAL_DEVICES_09_2026: ManualDeviceConfig[] = [
       }
     ],
     "note": "Excel: Електромер 39, ред 31"
+  },
+  {
+    "name": "Сграда 35 - Адмирал вода (ръчно)",
+    "likeDevice": {
+      "name": "Сграда 35 - Водомер N5"
+    },
+    "value": 8,
+    "clients": [
+      {
+        "name": "АДМИРАЛБЕТ ОНЛАЙН",
+        "percentage": 100
+      }
+    ],
+    "note": "Excel: Питейна вода – Адмирал получава 8 m³ от ет.3 студен, изважда се от главния водомер 0035"
+  },
+  {
+    "name": "Сграда 40 - Главен промишлен водомер - малък",
+    "likeDevice": {
+      "name": "Сграда 40 - Промишлен водопровод N1"
+    },
+    "meterReadings": {
+      "2026-08-01": 5334,
+      "2026-09-01": 5497
+    },
+    "clients": [
+      {
+        "name": "Карлокс ЕООД",
+        "percentage": 100
+      }
+    ],
+    "note": "Excel: Промишлена вода, малък 5 334 → 5 497; остатъкът е за Карлокс"
+  },
+  {
+    "name": "Сграда 40 - Главен промишлен водомер - голям",
+    "likeDevice": {
+      "name": "Сграда 40 - Промишлен водопровод N1"
+    },
+    "meterReadings": {
+      "2026-08-01": 179,
+      "2026-09-01": 179
+    },
+    "clients": [
+      {
+        "name": "Карлокс ЕООД",
+        "percentage": 100
+      }
+    ],
+    "note": "Excel: Промишлена вода, голям 179 → 179"
   }
 ];
 
@@ -135,6 +185,13 @@ export const EXCEL_ADJUSTMENTS_09_2026: AdjustmentConfig[] = [
     },
     "value": -350,
     "note": "Excel: Вимобайл −350"
+  },
+  {
+    "device": {
+      "name": "Сграда 35 - Водомер N5"
+    },
+    "value": -8,
+    "note": "Excel: Вимобайл = ет.3 студен − 8 m³ (8 m³ са за Адмирал)"
   }
 ];
 
@@ -514,6 +571,9 @@ export const EXCEL_CONFIG_09_2026: ExcelConfigItem[] = [
       },
       {
         "name": "Сграда 42 - Водомер N1"
+      },
+      {
+        "name": "Сграда 35 - Адмирал вода (ръчно)"
       }
     ],
     "clients": [
@@ -709,5 +769,44 @@ export const EXCEL_CONFIG_09_2026: ExcelConfigItem[] = [
       "name": "Сграда 34 - Електромер N1 - T2"
     },
     "subtracts": []
+  },
+  {
+    "device": {
+      "name": "Сграда 35 - Водомер N5"
+    },
+    "clients": [
+      {
+        "name": "ВИМОБАЙЛ АД",
+        "percentage": 100
+      }
+    ]
+  },
+  {
+    "device": {
+      "name": "Сграда 40 - Главен промишлен водомер - малък"
+    },
+    "subtracts": [
+      {
+        "name": "Сграда 40 - Промишлен водопровод N1"
+      },
+      {
+        "name": "Сграда 40 - Промишлен водопровод N2"
+      },
+      {
+        "name": "Сграда 40 - Промишлен водопровод N3"
+      },
+      {
+        "name": "Сграда 40 - Промишлен водопровод N4"
+      },
+      {
+        "name": "Сграда 40 - Промишлен водопровод N5"
+      }
+    ]
+  },
+  {
+    "device": {
+      "name": "Сграда 40 - Промишлен водопровод N6"
+    },
+    "clients": []
   }
 ];
