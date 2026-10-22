@@ -810,3 +810,35 @@ export const EXCEL_CONFIG_09_2026: ExcelConfigItem[] = [
     "clients": []
   }
 ];
+
+// ---------------------------------------------------------------------------
+// Ценови групи: отделна цена за всеки абонат за ток и за питейна / промишлена вода,
+// както в Excel (Справка: колони J–M; Питейна вода; Промишлена вода).
+
+/** Абонат за ток по номер на сграда (от името „Сграда NN - …“). */
+export const ELECTRICITY_GROUP_BY_BUILDING: Record<string, string> = {
+  '30': 'Аб. 95308012', '40': 'Аб. 95308012', '43': 'Аб. 95308012', '50': 'Аб. 95308012',
+  '34': 'Аб. 95308013', '36': 'Аб. 95308013', '37': 'Аб. 95308013', '42': 'Аб. 95308013', '44': 'Аб. 95308013',
+  '33': 'Аб. 95308039', '35': 'Аб. 95308039', '38': 'Аб. 95308039', '39': 'Аб. 95308039',
+};
+export const WATER_GROUP_INDUSTRIAL = 'Промишлена вода';
+export const WATER_GROUP_POTABLE = 'Питейна вода';
+
+export interface ExcelInvoiceConfig {
+  group: string;
+  service: 'electricity' | 'water';
+  quantity: number;
+  unit: string;
+  /** стойност без ДДС */
+  amount: number;
+  source: string;
+}
+
+/** Фактури за 09.2026 от Excel (без ДДС). */
+export const EXCEL_INVOICES_09_2026: ExcelInvoiceConfig[] = [
+  { group: 'Аб. 95308012', service: 'electricity', quantity: 23249, unit: 'kWh', amount: 4086.91, source: 'Справка: 603,96 пренос + 3 482,95 доставка' },
+  { group: 'Аб. 95308013', service: 'electricity', quantity: 41993, unit: 'kWh', amount: 7411.01, source: 'Справка: 927,00 пренос + 6 484,01 доставка' },
+  { group: 'Аб. 95308039', service: 'electricity', quantity: 55603, unit: 'kWh', amount: 9779.03, source: 'Справка: 1 089,72 пренос + 8 689,31 доставка' },
+  { group: WATER_GROUP_POTABLE, service: 'water', quantity: 434, unit: 'm³', amount: 796.39, source: 'Питейна вода: 434 m³, 796,39 €' },
+  { group: WATER_GROUP_INDUSTRIAL, service: 'water', quantity: 163, unit: 'm³', amount: 162.51, source: 'Промишлена вода: 163 m³, 162,51 €' },
+];

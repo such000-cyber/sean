@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
-import type { Device, Client, DeviceDependency, DeviceClientWithClient, Reading } from '@/lib/supabase';
+import type { Device, Client, DeviceDependency, DeviceClientWithClient, Reading, Supplier, SupplierInvoice } from '@/lib/supabase';
 import {
   EXCEL_CONFIG_09_2026,
   EXCEL_MANUAL_DEVICES_09_2026,
   EXCEL_ADJUSTMENTS_09_2026,
   EXCEL_CONFIG_COMPANY_ID,
   EXCEL_CONFIG_MONTH,
+  EXCEL_INVOICES_09_2026,
+  ELECTRICITY_GROUP_BY_BUILDING,
+  WATER_GROUP_INDUSTRIAL,
+  WATER_GROUP_POTABLE,
   type DeviceRef,
 } from '@/lib/excelConfig';
 import { Icon } from './Icon';
@@ -17,6 +21,8 @@ interface ExcelConfigPanelProps {
   clients: Client[];
   deviceDependencies: DeviceDependency[];
   deviceClients: DeviceClientWithClient[];
+  suppliers: Supplier[];
+  supplierInvoices: SupplierInvoice[];
   onDone: () => Promise<void>;
   onBack: () => void;
 }
@@ -34,18 +40,37 @@ function quantityLabel(m: { value?: number; meterReadings?: Record<string, numbe
   return fmtNum(m.value ?? 0);
 }
 
-export function ExcelConfigPanel({ devices, readings, clients, deviceDependencies, deviceClients, onDone, onBack }: ExcelConfigPanelProps) {
+const SERVICE_MONTH = EXCEL_CONFIG_MONTH.slice(0, 7);
+
+/** Ценова група за уред в София според Excel (абонат за ток / вид вода). */
+function excelGroupFor(d: { name: string; type: string; company_id: string | null }): string | null {
+  if (d.company_id !== EXCEL_CONFIG_COMPANY_ID) return null;
+  if (d.type === 'electricity') {
+    const m = d.name.match(/^Сграда (\d+)/);
+    return m ? ELECTRICITY_GROUP_BY_BUILDING[m[1]] ?? null : null;
+  }
+  if (d.type === 'water') return /промишлен/i.test(d.name) ? WATER_GROUP_INDUSTRIAL : WATER_GROUP_POTABLE;
+  return null;
+}
+
+export function ExcelConfigPanel({ devices, readings, clients, deviceDependencies, deviceClients, suppliers, supplierInvoices, onDone, onBack }: ExcelConfigPanelProps) {
   const [status, setStatus] = useState<'idle' | 'saving' | 'done'>('idle');
   const [log, setLog] = useState<string[]>([]);
   // null = проверява се; true/false = има ли новите полета в базата
   const [hasNewColumns, setHasNewColumns] = useState<boolean | null>(null);
+  const [hasPriceGroups, setHasPriceGroups] = useState<boolean | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const a = await supabase.from('readings').select('adjustment').limit(1);
       const b = await supabase.from('devices').select('is_manual').limit(1);
-      if (!cancelled) setHasNewColumns(!a.error && !b.error);
+      const c = await supabase.from('devices').select('price_group').limit(1);
+      const d = await supabase.from('supplier_invoices').select('price_group').limit(1);
+      if (!cancelled) {
+        setHasNewColumns(!a.error && !b.error);
+        setHasPriceGroups(!c.error && !d.error);
+      }
     })();
     return () => { cancelled = true; };
   }, []);
@@ -133,6 +158,33 @@ export function ExcelConfigPanel({ devices, readings, clients, deviceDependencie
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [companyDevices, readings]);
 
+  // Ценови групи: локацията на уредите в София и доставчиците там
+  const sofiaLocationId = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const d of companyDevices) if (d.location_id) counts.set(d.location_id, (counts.get(d.location_id) ?? 0) + 1);
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  }, [companyDevices]);
+  const groupsEnabled = hasPriceGroups === true;
+  const invoicePlan = useMemo(() => EXCEL_INVOICES_09_2026.map((inv) => {
+    const sup = suppliers
+      .filter((s) => s.company_id === EXCEL_CONFIG_COMPANY_ID && s.location_id === sofiaLocationId && s.service_type === inv.service)
+      .sort((a, b) => a.name.localeCompare(b.name))[0] ?? null;
+    const supIds = new Set(suppliers.filter((s) => s.company_id === EXCEL_CONFIG_COMPANY_ID && s.location_id === sofiaLocationId && s.service_type === inv.service).map((s) => s.id));
+    const existing = supplierInvoices.find((x) => supIds.has(x.supplier_id) && x.service_month === SERVICE_MONTH && (x.price_group ?? '') === inv.group) ?? null;
+    const devicesInGroup = companyDevices.filter((d) => excelGroupFor(d) === inv.group).length;
+    return { cfg: inv, supplier: sup, existing, devicesInGroup };
+  }), [suppliers, supplierInvoices, companyDevices, sofiaLocationId]);
+  const oldInvoices = useMemo(() => {
+    const supIds = new Set(suppliers.filter((s) => s.company_id === EXCEL_CONFIG_COMPANY_ID && s.location_id === sofiaLocationId && (s.service_type === 'electricity' || s.service_type === 'water')).map((s) => s.id));
+    return supplierInvoices.filter((x) => supIds.has(x.supplier_id) && x.service_month === SERVICE_MONTH && !x.price_group);
+  }, [suppliers, supplierInvoices, sofiaLocationId]);
+  const groupChanges = useMemo(() => companyDevices
+    .map((d) => ({ d, group: excelGroupFor(d) }))
+    .filter((x) => x.group !== null && (x.d.price_group ?? null) !== x.group), [companyDevices]);
+  const groupErrors = groupsEnabled
+    ? invoicePlan.filter((p) => !p.supplier).map((p) => `Няма доставчик за ${p.cfg.service === 'electricity' ? 'ток' : 'вода'} в локацията на София – фактурата „${p.cfg.group}“ не може да се създаде`)
+    : [];
+
   const manualErrors = manualEnabled
     ? manualPlan.flatMap((m) => [
         ...(m.duplicate ? [`Ръчен уред „${m.cfg.name}“ съществува повече от веднъж`] : []),
@@ -146,10 +198,10 @@ export function ExcelConfigPanel({ devices, readings, clients, deviceDependencie
         ...(!a.error && !a.reading ? [`Няма показание за 09.2026 на „${a.cfg.device.name}“ – корекцията ще се запише, след като се въведе показание`] : []),
       ])
     : [];
-  const allErrors = [...items.flatMap((i) => i.errors), ...manualErrors];
+  const allErrors = [...items.flatMap((i) => i.errors), ...manualErrors, ...groupErrors];
 
   const handleApply = async () => {
-    if (allErrors.length > 0 || hasNewColumns === null) return;
+    if (allErrors.length > 0 || hasNewColumns === null || hasPriceGroups === null) return;
     setStatus('saving');
     const messages: string[] = [];
     const createdIds = new Map<string, string>(); // име → id
@@ -228,6 +280,43 @@ export function ExcelConfigPanel({ devices, readings, clients, deviceDependencie
         const up = await supabase.from('readings').update({ adjustment: a.cfg.value }).eq('id', a.reading.id);
         if (up.error) messages.push(`✗ ${a.cfg.device.name} – корекция: ${up.error.message}`);
         else messages.push(`✓ ${a.cfg.device.name}: корекция ${a.cfg.value > 0 ? '+' : ''}${fmtNum(a.cfg.value)}`);
+      }
+    }
+
+    // 4) Ценови групи на уредите и фактури по група за месеца
+    if (groupsEnabled) {
+      const byGroup = new Map<string, string[]>();
+      for (const d of companyDevices) {
+        const g = excelGroupFor(d);
+        if (g) byGroup.set(g, [...(byGroup.get(g) ?? []), d.id]);
+      }
+      // и новосъздадените уреди
+      for (const [name, id] of createdIds) {
+        const like = manualPlan.find((m) => m.cfg.name === name)?.like;
+        const g = like ? excelGroupFor({ name, type: like.type, company_id: like.company_id }) : null;
+        if (g) byGroup.set(g, [...(byGroup.get(g) ?? []), id]);
+      }
+      for (const [g, ids] of byGroup) {
+        const up = await supabase.from('devices').update({ price_group: g }).in('id', ids);
+        messages.push(up.error ? `✗ Група „${g}“: ${up.error.message}` : `✓ Група „${g}“: ${ids.length} уреда`);
+      }
+      for (const p of invoicePlan) {
+        if (p.existing || !p.supplier) continue;
+        const vat = Math.round(p.cfg.amount * 0.2 * 100) / 100;
+        const ins = await supabase.from('supplier_invoices').insert({
+          supplier_id: p.supplier.id,
+          invoice_number: `Excel 09.2026 – ${p.cfg.group}`,
+          invoice_date: '2026-09-30',
+          service_month: SERVICE_MONTH,
+          quantity: p.cfg.quantity,
+          unit: p.cfg.unit,
+          amount: p.cfg.amount,
+          vat_amount: vat,
+          total_amount: Math.round((p.cfg.amount + vat) * 100) / 100,
+          note: `Създадено от „Настройки от Excel“ (m_9_2026). ${p.cfg.source}`,
+          price_group: p.cfg.group,
+        });
+        messages.push(ins.error ? `✗ Фактура „${p.cfg.group}“: ${ins.error.message}` : `✓ Фактура „${p.cfg.group}“: ${fmtNum(p.cfg.quantity)} ${p.cfg.unit}, ${fmtNum(p.cfg.amount)} €`);
       }
     }
 
@@ -344,6 +433,56 @@ export function ExcelConfigPanel({ devices, readings, clients, deviceDependencie
         </section>
       )}
 
+      {hasPriceGroups === false && (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p className="font-semibold">Отделните цени по абонат и за промишлената вода ще бъдат пропуснати: в базата още няма полето „ценова група“.</p>
+          <p className="mt-1">
+            В чата на Bolt напишете: <span className="select-all rounded bg-white px-1.5 py-0.5 font-mono text-xs">Apply the migration supabase/migrations/20261022110000_add_price_groups.sql</span>
+            {' '}и след това отворете този екран отново.
+          </p>
+        </div>
+      )}
+
+      {groupsEnabled && (
+        <section className="mb-6">
+          <h3 className="mb-2 text-sm font-semibold text-slate-700">Отделни цени: абонати за ток, питейна и промишлена вода</h3>
+          <p className="mb-2 text-xs text-slate-500">
+            {groupChanges.length > 0 ? `${groupChanges.length} уреда ще получат ценова група.` : 'Всички уреди вече имат ценова група.'}
+            {' '}Всяка група се оценява по своята фактура, както в Excel.
+          </p>
+          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 bg-slate-50/50 text-left text-xs font-medium text-slate-500">
+                  <th className="px-4 py-3">Група</th>
+                  <th className="px-4 py-3 text-right">Уреди</th>
+                  <th className="px-4 py-3 text-right">Фактура 09.2026</th>
+                  <th className="px-4 py-3">Доставчик</th>
+                  <th className="px-4 py-3">Състояние</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50 align-top">
+                {invoicePlan.map((p) => (
+                  <tr key={p.cfg.group}>
+                    <td className="px-4 py-3 font-medium text-slate-700">{p.cfg.group}</td>
+                    <td className="px-4 py-3 text-right font-mono tabular-nums">{p.devicesInGroup}</td>
+                    <td className="px-4 py-3 text-right font-mono tabular-nums">{fmtNum(p.cfg.quantity)} {p.cfg.unit} · {fmtNum(p.cfg.amount)} €</td>
+                    <td className="px-4 py-3 text-slate-600">{p.supplier?.name ?? <span className="text-red-600">няма</span>}</td>
+                    <td className="px-4 py-3 text-slate-500">{p.existing ? `има фактура (${p.existing.invoice_number})` : 'ще бъде създадена'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {oldInvoices.length > 0 && (
+            <p className="mt-2 text-xs text-slate-500">
+              Фактури за 09.2026 без група ({oldInvoices.map((x) => x.invoice_number).join(', ')}) няма да се ползват за уредите с група.
+              Ако вече са заменени от фактурите по група, може да ги изтриете от „Доставчици“.
+            </p>
+          )}
+        </section>
+      )}
+
       <h3 className="mb-2 text-sm font-semibold text-slate-700">Зависимости и клиенти</h3>
       <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
         <table className="w-full text-sm">
@@ -373,11 +512,11 @@ export function ExcelConfigPanel({ devices, readings, clients, deviceDependencie
       <div className="mt-4 flex items-center justify-end gap-3">
         <button
           onClick={handleApply}
-          disabled={allErrors.length > 0 || status === 'saving' || hasNewColumns === null}
+          disabled={allErrors.length > 0 || status === 'saving' || hasNewColumns === null || hasPriceGroups === null}
           className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-40"
         >
           <Icon name="Save" size={16} />
-          {status === 'saving' ? 'Записване…' : hasNewColumns === null ? 'Проверка…' : 'Приложи настройките'}
+          {status === 'saving' ? 'Записване…' : hasNewColumns === null || hasPriceGroups === null ? 'Проверка…' : 'Приложи настройките'}
         </button>
       </div>
     </div>

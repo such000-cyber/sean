@@ -15,6 +15,7 @@ interface SupplierInvoiceFormProps {
     vat_amount: number;
     total_amount: number;
     note: string | null;
+    price_group?: string | null;
     id?: string;
   }) => Promise<void>;
   onCancel: () => void;
@@ -50,6 +51,7 @@ export function SupplierInvoiceForm({ invoice, supplier, onSave, onCancel }: Sup
   const [amount, setAmount] = useState(invoice ? String(invoice.amount) : '');
   const [vatAmount, setVatAmount] = useState(invoice ? String(invoice.vat_amount) : '');
   const [note, setNote] = useState(invoice?.note ?? '');
+  const [priceGroup, setPriceGroup] = useState(invoice?.price_group ?? '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -88,6 +90,7 @@ export function SupplierInvoiceForm({ invoice, supplier, onSave, onCancel }: Sup
         vat_amount: parseFloat(vatAmount.replace(',', '.')) || 0,
         total_amount: totalAmount,
         note: note.trim() || null,
+        ...(priceGroup.trim() || invoice?.price_group !== undefined ? { price_group: priceGroup.trim() || null } : {}),
         id: invoice?.id,
       });
     } catch (err) {
@@ -133,6 +136,17 @@ export function SupplierInvoiceForm({ invoice, supplier, onSave, onCancel }: Sup
                 className="w-full rounded-lg border border-slate-200 px-3.5 py-2.5 text-sm text-slate-900 transition-colors focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100"
               />
             </div>
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-slate-700">Ценова група (абонат)</label>
+            <input
+              type="text"
+              value={priceGroup}
+              onChange={(e) => setPriceGroup(e.target.value)}
+              placeholder="напр. Аб. 95308012 – празно = за всички уреди"
+              className="w-full rounded-lg border border-slate-200 px-3.5 py-2.5 text-sm text-slate-900 transition-colors placeholder:text-slate-400 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100"
+            />
           </div>
 
           <div>

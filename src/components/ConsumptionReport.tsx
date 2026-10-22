@@ -145,8 +145,8 @@ export function ConsumptionReport({
     });
   }, [supplierInvoices, suppliers, selectedLocationId]);
 
-  // Compute unit prices from supplier invoices for the selected month, keyed by company+location.
-  // Key format: "<companyId>|<locationId>|<serviceKey>".
+  // Compute unit prices from supplier invoices for the selected month, keyed by company+location+price group.
+  // Key format: "<companyId>|<locationId>|<serviceKey>|<priceGroup>" (priceGroup е празно за фактури без група).
   // All invoice amounts for the same service type within a company+location are summed, but the quantity
   // is taken once (e.g. network + energy suppliers bill the same kWh).
   const unitPricesByCompany = useMemo(() => {
@@ -156,7 +156,7 @@ export function ConsumptionReport({
       const supplier = suppliers.find((s) => s.id === inv.supplier_id);
       if (!supplier) continue;
       const serviceKey = DEVICE_TYPE_TO_SERVICE[supplier.service_type as DeviceType] ?? 'other';
-      const compKey = `${supplier.company_id ?? 'null'}|${supplier.location_id ?? 'null'}|${serviceKey}`;
+      const compKey = `${supplier.company_id ?? 'null'}|${supplier.location_id ?? 'null'}|${serviceKey}|${(inv.price_group ?? '').trim()}`;
       if (!groups[compKey]) {
         groups[compKey] = { totalAmount: 0, quantity: Number(inv.quantity), unit: inv.unit, supplierNames: new Set() };
       }
@@ -181,13 +181,21 @@ export function ConsumptionReport({
   const effectivePrices = useMemo(() => {
     const result: Record<string, { price: number; unit: string; supplierName: string }> = {};
     for (const [key, val] of Object.entries(unitPricesByCompany)) {
-      const [compId, locId, serviceKey] = key.split('|');
+      const [compId, locId, serviceKey, group] = key.split('|');
       if (selectedCompanyId !== 'all' && compId !== selectedCompanyId) continue;
       if (selectedLocationId !== 'all' && locId !== selectedLocationId) continue;
-      if (!result[serviceKey]) result[serviceKey] = val;
+      const displayKey = group ? `${serviceKey}|${group}` : serviceKey;
+      if (!result[displayKey]) result[displayKey] = val;
     }
     return result;
   }, [unitPricesByCompany, selectedCompanyId, selectedLocationId]);
+
+  // Ключ на цената за уред: с ценовата му група, ако за нея има фактура за месеца; иначе общата цена.
+  const priceKeyFor = (device: Device): string => {
+    const base = `${device.company_id ?? 'null'}|${device.location_id ?? 'null'}|${DEVICE_TYPE_TO_SERVICE[device.type]}|`;
+    const group = (device.price_group ?? '').trim();
+    return group && unitPricesByCompany[base + group] ? base + group : base;
+  };
 
   // "Base" devices (is_base = true) use a manually-set unit price instead of invoice-derived pricing.
   // Only base water devices are shown with the manual price input; other base devices fall back to 0 if no invoice.
@@ -233,7 +241,7 @@ export function ConsumptionReport({
       if (inv.service_month !== month) continue;
       const supplier = suppliers.find((s) => s.id === inv.supplier_id);
       if (!supplier || supplier.service_type !== 'electricity') continue;
-      const key = `${supplier.company_id ?? 'null'}|${supplier.location_id ?? 'null'}`;
+      const key = `${supplier.company_id ?? 'null'}|${supplier.location_id ?? 'null'}|electricity|${(inv.price_group ?? '').trim()}`;
       if (seenQty.has(key)) continue;
       seenQty.add(key);
       delivered[key] = Number(inv.quantity);
@@ -241,7 +249,7 @@ export function ConsumptionReport({
     const consumed: Record<string, number> = {};
     for (const n of netConsumptions.values()) {
       if (n.device.type !== 'electricity') continue;
-      const key = `${n.device.company_id ?? 'null'}|${n.device.location_id ?? 'null'}`;
+      const key = priceKeyFor(n.device);
       consumed[key] = (consumed[key] ?? 0) + n.net;
     }
     const result: Record<string, number> = {};
@@ -251,7 +259,8 @@ export function ConsumptionReport({
       result[key] = d > 0 && c > 0 ? d / c - 1 : 0;
     }
     return { coefficients: result, delivered, consumed };
-  }, [locationFilteredInvoices, suppliers, month, netConsumptions]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locationFilteredInvoices, suppliers, month, netConsumptions, unitPricesByCompany]);
 
   const electricityLossCoefficients = electricityLoss.coefficients;
 
@@ -266,25 +275,28 @@ export function ConsumptionReport({
         if (selectedLocationId !== 'all' && locId !== selectedLocationId) return false;
         return true;
       })
+      // фактура без уреди (напр. стара обща фактура, заменена от фактури по абонат) не се показва
+      .filter((key) => (electricityLoss.consumed[key] ?? 0) !== 0)
       .map((key) => {
-        const [compId, locId] = key.split('|');
+        const [compId, locId, , group] = key.split('|');
         const delivered = electricityLoss.delivered[key];
         const consumed = electricityLoss.consumed[key] ?? 0;
         const company = companies.find((c) => c.id === compId);
         const location = locations.find((l) => l.id === locId);
         const negatives = (Array.from(netConsumptions.values()) as NetConsumption[]).filter(
-          (n) => n.device.type === 'electricity' && `${n.device.company_id ?? 'null'}|${n.device.location_id ?? 'null'}` === key && n.net < 0,
+          (n) => n.device.type === 'electricity' && priceKeyFor(n.device) === key && n.net < 0,
         );
         return {
           key,
-          label: [company?.name, location?.name].filter(Boolean).join(' · ') || 'Без фирма',
+          label: [company?.name, location?.name, group || null].filter(Boolean).join(' · ') || 'Без фирма',
           delivered,
           consumed,
           lossPct: consumed > 0 ? (delivered / consumed - 1) * 100 : 0,
           negatives,
         };
       });
-  }, [electricityLoss, selectedCompanyId, selectedLocationId, companies, locations, netConsumptions]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [electricityLoss, selectedCompanyId, selectedLocationId, companies, locations, netConsumptions, unitPricesByCompany]);
 
 
   // Build report grouped by client
@@ -321,13 +333,13 @@ export function ConsumptionReport({
       if (device.is_base && device.type === 'water') {
         unitPrice = waterUnitPrice;
       } else {
-        const compKey = `${device.company_id ?? 'null'}|${device.location_id ?? 'null'}|${serviceKey}`;
+        const compKey = priceKeyFor(device);
         const priceInfo = unitPricesByCompany[compKey] ?? (selectedCompanyId === 'all' ? effectivePrices[serviceKey] : undefined);
         unitPrice = priceInfo?.price ?? 0;
       }
       const amount = clientShare * unitPrice;
       const isElectricityDevice = device.type === 'electricity';
-      const deviceLossCoeff = electricityLossCoefficients[`${device.company_id ?? 'null'}|${device.location_id ?? 'null'}`] ?? 0;
+      const deviceLossCoeff = electricityLossCoefficients[priceKeyFor(device)] ?? 0;
       const finalAmount = isElectricityDevice ? amount * (1 + deviceLossCoeff) : amount;
 
       clientEntry.devices.push({
@@ -594,7 +606,10 @@ export function ConsumptionReport({
               .filter(([key]) => key !== 'water')
               .map(([key, info]) => (
                 <span key={key} className="text-xs text-slate-600">
-                  <span className="font-medium text-slate-700">{SERVICE_TYPE_LABELS[key as keyof typeof SERVICE_TYPE_LABELS] ?? key}</span>:
+                  <span className="font-medium text-slate-700">
+                    {SERVICE_TYPE_LABELS[key.split('|')[0] as keyof typeof SERVICE_TYPE_LABELS] ?? key.split('|')[0]}
+                    {key.includes('|') ? ` – ${key.split('|')[1]}` : ''}
+                  </span>:
                   {' '}{formatUnitPrice(info.price)} €/{info.unit}
                   <span className="text-slate-400"> ({info.supplierName})</span>
                 </span>

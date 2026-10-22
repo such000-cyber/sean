@@ -12,7 +12,7 @@ interface SuppliersViewProps {
   isAdmin: boolean;
   onSaveSupplier: (data: { name: string; service_type: ServiceType; company_id: string | null; location_id: string | null; bulstat: string | null; address: string | null; phone: string | null; email: string | null }) => Promise<void>;
   onDeleteSupplier: (supplier: Supplier) => Promise<void>;
-  onSaveInvoice: (supplierId: string, data: { invoice_number: string; invoice_date: string; service_month: string; quantity: number; unit: string; amount: number; vat_amount: number; total_amount: number; note: string | null; id?: string }) => Promise<void>;
+  onSaveInvoice: (supplierId: string, data: { invoice_number: string; invoice_date: string; service_month: string; quantity: number; unit: string; amount: number; vat_amount: number; total_amount: number; note: string | null; price_group?: string | null; id?: string }) => Promise<void>;
   onDeleteInvoice: (invoice: SupplierInvoice) => Promise<void>;
   onBack: () => void;
 }
@@ -89,7 +89,7 @@ function SupplierExpanded({
               {invs.map((inv) => (
                 <tr key={inv.id} className="transition-colors hover:bg-white/60">
                   <td className="px-5 py-3 font-medium text-slate-700">{formatMonthLabel(inv.service_month)}</td>
-                  <td className="px-5 py-3 text-slate-600">{inv.invoice_number}</td>
+                  <td className="px-5 py-3 text-slate-600">{inv.invoice_number}{inv.price_group ? <span className="ml-1.5 rounded bg-sky-50 px-1.5 py-0.5 text-xs text-sky-700">{inv.price_group}</span> : null}</td>
                   <td className="px-5 py-3 text-slate-500">
                     {new Date(inv.invoice_date).toLocaleDateString('bg-BG')}
                   </td>
@@ -268,7 +268,7 @@ export function SuppliersView({
   const handleSaveInvoice = async (data: {
     invoice_number: string; invoice_date: string; service_month: string;
     quantity: number; unit: string; amount: number; vat_amount: number;
-    total_amount: number; note: string | null; id?: string;
+    total_amount: number; note: string | null; price_group?: string | null; id?: string;
   }) => {
     if (!invoiceFormSupplier) return;
     await onSaveInvoice(invoiceFormSupplier.id, data);
