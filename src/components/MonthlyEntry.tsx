@@ -13,7 +13,7 @@ interface MonthlyEntryProps {
   deviceClients: DeviceClientWithClient[];
   deviceDependencies: DeviceDependency[];
   locations: CompanyLocation[];
-  onSave: (deviceId: string, readingDate: string, value: number, note: string | null, existingId?: string) => Promise<void>;
+  onSave: (deviceId: string, readingDate: string, value: number, note: string | null, existingId?: string, adjustment?: number) => Promise<void>;
   onBack: () => void;
 }
 
@@ -29,6 +29,8 @@ function formatValue(v: number): string {
 interface RowData {
   value: string;
   note: string;
+  /** корекция за месеца (+/−), празно = 0 */
+  adjustment: string;
   existingReadingId: string | null;
   previousValue: number | null;
   previousDate: string | null;
@@ -80,6 +82,7 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
         newRows[device.id] = {
           value: displayValue,
           note: existing?.note ?? '',
+          adjustment: existing?.adjustment ? String(Number(existing.adjustment)) : '',
           existingReadingId: existing?.id ?? null,
           previousValue: prevDisplayValue,
           previousDate: prev?.reading_date ?? null,
@@ -128,7 +131,8 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
       const v = parseFloat(row.value.replace(',', '.'));
       if (isNaN(v)) continue;
       overridden.add(deviceId);
-      typed.push({ id: `typed-${deviceId}`, device_id: deviceId, reading_date: monthDate, value: v, raw_value: v, note: null, created_at: '' });
+      const adj = parseFloat(row.adjustment.replace(',', '.'));
+      typed.push({ id: `typed-${deviceId}`, device_id: deviceId, reading_date: monthDate, value: v, raw_value: v, adjustment: isNaN(adj) ? 0 : adj, note: null, created_at: '' });
     }
     const merged = readings.filter((r) => !(r.reading_date === monthDate && overridden.has(r.device_id))).concat(typed);
     return computeNetConsumptions(devices, merged, deviceDependencies, monthDate);
@@ -170,7 +174,7 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
     return `${MONTH_NAMES_BG[parseInt(m) - 1]} ${y}`;
   }, [month]);
 
-  const handleRowChange = (deviceId: string, field: 'value' | 'note', val: string) => {
+  const handleRowChange = (deviceId: string, field: 'value' | 'note' | 'adjustment', val: string) => {
     setRows((prev) => ({
       ...prev,
       [deviceId]: { ...prev[deviceId], [field]: val, dirty: true, saved: false },
@@ -191,10 +195,17 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
       return;
     }
 
+    const adjText = row.adjustment.trim();
+    const adjValue = adjText ? parseFloat(adjText.replace(',', '.')) : 0;
+    if (isNaN(adjValue)) {
+      setGlobalError('Корекцията трябва да е число (напр. -427 или 800)');
+      return;
+    }
+
     setSaving((prev) => ({ ...prev, [deviceId]: true }));
     setGlobalError(null);
     try {
-      await onSave(deviceId, `${month}-01`, numValue, row.note.trim() || null, row.existingReadingId ?? undefined);
+      await onSave(deviceId, `${month}-01`, numValue, row.note.trim() || null, row.existingReadingId ?? undefined, adjValue);
       setRows((prev) => ({
         ...prev,
         [deviceId]: { ...prev[deviceId], saved: true, dirty: false, existingReadingId: prev[deviceId].existingReadingId ?? 'new' },
@@ -229,7 +240,7 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
 
     const header = [
       'Уред', 'Тип', 'Мерна единица', 'Номер', 'Коефициент',
-      'Предишно показание', 'Текущо показание',
+      'Предишно показание', 'Текущо показание', 'Корекция',
       'Разлика', 'Потребление (с коеф.)', 'Нето потребление',
       'Клиенти', 'Бележка',
     ];
@@ -244,7 +255,7 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
       const net = netConsumptions.get(device.id) ?? null;
       const currentValue = row.value.trim() ? parseFloat(row.value.replace(',', '.')) : null;
       const prevValue = row.previousValue;
-      const delta = currentValue !== null && prevValue !== null ? currentValue - prevValue : null;
+      const delta = device.is_manual ? currentValue : currentValue !== null && prevValue !== null ? currentValue - prevValue : null;
       const grossConsumption = net !== null ? net.gross : null;
       const netConsumption = net !== null ? net.net : null;
       const dcs = getDeviceClients(device.id);
@@ -260,6 +271,7 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
         Number(device.coefficient),
         prevValue ?? '',
         currentValue ?? '',
+        row.adjustment.trim() ? Number(row.adjustment.replace(',', '.')) || 0 : '',
         delta !== null ? Math.round(delta * 1000) / 1000 : '',
         grossConsumption ?? '',
         netConsumption ?? '',
@@ -417,6 +429,7 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
                     <th className="px-4 py-3 text-left font-medium text-slate-500">Уред</th>
                     <th className="px-4 py-3 text-right font-medium text-slate-500">Предишно</th>
                     <th className="px-4 py-3 text-right font-medium text-slate-500">Текущо *</th>
+                    <th className="px-4 py-3 text-right font-medium text-slate-500" title="Добавя се към потреблението за месеца (+/−), след коефициента">Корекция</th>
                     <th className="px-4 py-3 text-right font-medium text-slate-500">Потребление</th>
                     <th className="px-4 py-3 text-center font-medium text-slate-500">Статус</th>
                   </tr>
@@ -429,9 +442,10 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
                     const depIds = deviceDependencies.filter((d) => d.device_id === device.id).map((d) => d.depends_on_device_id);
                     const depDevices = depIds.map((id) => devices.find((d) => d.id === id)).filter((d): d is Device => !!d);
                     const net = netConsumptions.get(device.id) ?? null;
-                    // показваме разликата в показанията (без коеф.) и консумацията с коеф./нето
-                    const consumption = net !== null && device.coefficient ? Math.round((net.gross / device.coefficient) * 1000) / 1000 : null;
-                    const coefConsumption = net !== null ? net.gross : null;
+                    // потребление за месеца: (текущо − предишно) × коеф. + корекция; за ръчен уред – въведеното + корекция
+                    const consumption = net !== null ? net.gross : null;
+                    const rowAdj = parseFloat(row.adjustment.replace(',', '.')) || 0;
+                    const isManual = !!device.is_manual;
                     const computedValue = net !== null && depIds.length > 0 ? net.net : null;
                     const allocatable = net !== null ? net.net : null;
                     const dcs = getDeviceClients(device.id);
@@ -453,7 +467,8 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
                                 <div className="flex items-center gap-1.5 text-xs text-slate-400">
                                   <Icon name={iconForType} size={11} />
                                   <span>{device.unit}</span>
-                                  {device.coefficient !== 1 && <span>· коеф. {device.coefficient}</span>}
+                                  {isManual && <span className="text-violet-500">· ръчно количество</span>}
+                                  {!isManual && device.coefficient !== 1 && <span>· коеф. {device.coefficient}</span>}
                                   {compName && <span className="truncate">· {compName}</span>}
                                   {depDevices.length > 0 && (
                                     <span className="truncate text-sky-500">· − {depDevices.map((d) => d.name).join(', ')}</span>
@@ -463,7 +478,9 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
                             </div>
                           </td>
                           <td className="px-4 py-3 text-right text-slate-500">
-                            {row.previousValue !== null ? (
+                            {isManual ? (
+                              <span className="text-xs text-slate-300">без брояч</span>
+                            ) : row.previousValue !== null ? (
                               <span>{formatValue(row.previousValue)}</span>
                             ) : (
                               <span className="text-slate-300">—</span>
@@ -497,15 +514,33 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
                             />
                           </td>
                           <td className="px-4 py-3 text-right">
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={row.adjustment}
+                              onChange={(e) => handleRowChange(device.id, 'adjustment', e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter' && row.dirty && row.value.trim()) handleSaveRow(device.id); }}
+                              placeholder="±"
+                              readOnly={isPastMonth}
+                              aria-label={`Корекция за ${device.name}`}
+                              className={`w-20 rounded-lg border px-2 py-1.5 text-right text-sm transition-colors focus:outline-none focus:ring-2 ${
+                                isPastMonth
+                                  ? 'border-slate-100 bg-slate-50 text-slate-400 cursor-not-allowed'
+                                  : 'border-slate-200 text-slate-900 focus:border-sky-400 focus:ring-sky-100'
+                              }`}
+                            />
+                          </td>
+                          <td className="px-4 py-3 text-right">
                             {consumption !== null ? (
                               <div>
                                 <span className={`font-semibold ${consumption > 0 ? 'text-amber-600' : consumption < 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
                                   {consumption > 0 ? '+' : ''}{formatValue(consumption)}
                                 </span>
-                                {device.coefficient !== 1 && coefConsumption !== null && (
-                                  <span className="block text-xs text-slate-400">
-                                    с коеф.: {formatValue(coefConsumption)}
-                                  </span>
+                                {!isManual && device.coefficient !== 1 && (
+                                  <span className="block text-xs text-slate-400">с коеф. {device.coefficient}</span>
+                                )}
+                                {rowAdj !== 0 && (
+                                  <span className="block text-xs text-violet-500">в т.ч. корекция {rowAdj > 0 ? '+' : ''}{formatValue(rowAdj)}</span>
                                 )}
                                 {computedValue !== null && net !== null && (
                                   <span className="block text-xs text-sky-500">
@@ -550,7 +585,7 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
                         {/* Client allocation breakdown row */}
                         {dcs.length > 0 && allocatable !== null && (
                           <tr key={`${device.id}-clients`} className="bg-slate-50/30">
-                            <td colSpan={5} className="px-4 py-2.5">
+                            <td colSpan={6} className="px-4 py-2.5">
                               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pl-5">
                                 <span className="text-xs font-medium text-slate-400">Разпределение:</span>
                                 {dcs.map((dc) => {
