@@ -1,4 +1,7 @@
+import { useState, useEffect, useCallback } from 'react';
+import { supabase, type Device, type Company, type CompanyLocation, type Client, type DeviceClientWithClient, type DeviceDependency } from '@/lib/supabase';
 import { Icon } from '@/components/Icon';
+import { DeviceMap } from '@/components/DeviceMap';
 
 interface HelpPageProps {
   onBack: () => void;
@@ -200,6 +203,62 @@ const SECTIONS = [
 ];
 
 export function HelpPage({ onBack }: HelpPageProps) {
+  const [showMap, setShowMap] = useState(false);
+  const [mapDevices, setMapDevices] = useState<Device[]>([]);
+  const [mapCompanies, setMapCompanies] = useState<Company[]>([]);
+  const [mapLocations, setMapLocations] = useState<CompanyLocation[]>([]);
+  const [mapClients, setMapClients] = useState<Client[]>([]);
+  const [mapDeviceClients, setMapDeviceClients] = useState<DeviceClientWithClient[]>([]);
+  const [mapDependencies, setMapDependencies] = useState<DeviceDependency[]>([]);
+  const [mapLoading, setMapLoading] = useState(false);
+
+  const loadMapData = useCallback(async () => {
+    setMapLoading(true);
+    const [devs, comps, locs, clnts, devClnts, deps] = await Promise.allSettled([
+      supabase.from('devices').select('*').order('sort_order', { ascending: true }),
+      supabase.from('companies').select('*').order('created_at', { ascending: true }),
+      supabase.from('company_locations').select('*').order('name', { ascending: true }),
+      supabase.from('clients').select('*').order('created_at', { ascending: true }),
+      supabase.from('device_clients').select('*, client:clients(*)').order('created_at', { ascending: true }),
+      supabase.from('device_dependencies').select('*').order('sort_order', { ascending: true }),
+    ]);
+    if (devs.status === 'fulfilled') setMapDevices(devs.value.data as Device[]);
+    if (comps.status === 'fulfilled') setMapCompanies(comps.value.data as Company[]);
+    if (locs.status === 'fulfilled') setMapLocations(locs.value.data as CompanyLocation[]);
+    if (clnts.status === 'fulfilled') setMapClients(clnts.value.data as Client[]);
+    if (devClnts.status === 'fulfilled') setMapDeviceClients(devClnts.value.data as unknown as DeviceClientWithClient[]);
+    if (deps.status === 'fulfilled') setMapDependencies(deps.value.data as DeviceDependency[]);
+    setMapLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (showMap) loadMapData();
+  }, [showMap, loadMapData]);
+
+  if (showMap) {
+    if (mapLoading) {
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-slate-50">
+          <div className="flex flex-col items-center gap-3">
+            <div className="h-10 w-10 animate-spin rounded-full border-3 border-slate-200 border-t-sky-500" />
+            <p className="text-sm text-slate-400">Зареждане на схемата...</p>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <DeviceMap
+        devices={mapDevices}
+        companies={mapCompanies}
+        locations={mapLocations}
+        clients={mapClients}
+        deviceClients={mapDeviceClients}
+        deviceDependencies={mapDependencies}
+        onBack={() => setShowMap(false)}
+      />
+    );
+  }
+
   const handlePrint = () => {
     window.print();
   };
@@ -219,6 +278,14 @@ export function HelpPage({ onBack }: HelpPageProps) {
               </div>
             </div>
             <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowMap(true)}
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-semibold text-slate-600 shadow-sm transition-all hover:bg-slate-50"
+              >
+                <Icon name="MapPin" size={16} />
+                <span className="hidden sm:inline">Схема по локации</span>
+                <span className="sm:hidden">Схема</span>
+              </button>
               <button
                 onClick={handlePrint}
                 className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-3.5 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-sky-700 active:scale-95"

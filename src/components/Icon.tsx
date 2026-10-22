@@ -37,6 +37,7 @@ import {
   Receipt,
   Settings,
   Euro,
+  ArrowRight,
 } from 'lucide-react';
 import type { ComponentType } from 'react';
 
@@ -82,6 +83,7 @@ const iconMap: Record<string, ComponentType<IconProps>> = {
   Receipt,
   Settings,
   Euro,
+  ArrowRight,
 };
 
 export function Icon({
