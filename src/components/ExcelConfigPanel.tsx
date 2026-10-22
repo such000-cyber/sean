@@ -29,6 +29,10 @@ function fmtPct(p: number) {
 function fmtNum(v: number) {
   return v.toLocaleString('bg-BG', { maximumFractionDigits: 3 });
 }
+function quantityLabel(m: { value?: number; meterReadings?: Record<string, number> }) {
+  if (m.meterReadings) return Object.values(m.meterReadings).map(fmtNum).join(' → ');
+  return fmtNum(m.value ?? 0);
+}
 
 export function ExcelConfigPanel({ devices, readings, clients, deviceDependencies, deviceClients, onDone, onBack }: ExcelConfigPanelProps) {
   const [status, setStatus] = useState<'idle' | 'saving' | 'done'>('idle');
@@ -164,7 +168,7 @@ export function ExcelConfigPanel({ devices, readings, clients, deviceDependencie
             inventory_number: null,
             coefficient: 1,
             is_base: false,
-            is_manual: true,
+            is_manual: !m.cfg.meterReadings,
             location: null,
             location_id: like.location_id,
             company_id: like.company_id,
@@ -173,22 +177,22 @@ export function ExcelConfigPanel({ devices, readings, clients, deviceDependencie
           }).select('id').single();
           if (ins.error || !ins.data) { messages.push(`✗ ${m.cfg.name} – създаване: ${ins.error?.message}`); continue; }
           id = ins.data.id as string;
-        } else {
+        } else if (!m.cfg.meterReadings) {
           await supabase.from('devices').update({ is_manual: true }).eq('id', id);
         }
         createdIds.set(m.cfg.name, id);
-        const rd = await supabase.from('readings').upsert(
-          { device_id: id, reading_date: EXCEL_CONFIG_MONTH, value: m.cfg.value, raw_value: m.cfg.value, note: m.cfg.note },
-          { onConflict: 'device_id,reading_date' },
-        );
-        if (rd.error) { messages.push(`✗ ${m.cfg.name} – количество: ${rd.error.message}`); continue; }
+        const readingRows = m.cfg.meterReadings
+          ? Object.entries(m.cfg.meterReadings).map(([date, v]) => ({ device_id: id, reading_date: date, value: v, raw_value: v, note: m.cfg.note }))
+          : [{ device_id: id, reading_date: EXCEL_CONFIG_MONTH, value: m.cfg.value ?? 0, raw_value: m.cfg.value ?? 0, note: m.cfg.note }];
+        const rd = await supabase.from('readings').upsert(readingRows, { onConflict: 'device_id,reading_date' });
+        if (rd.error) { messages.push(`✗ ${m.cfg.name} – показания: ${rd.error.message}`); continue; }
         const delC = await supabase.from('device_clients').delete().eq('device_id', id);
         if (delC.error) { messages.push(`✗ ${m.cfg.name} – клиенти: ${delC.error.message}`); continue; }
         const insC = await supabase.from('device_clients').insert(
           m.cfg.clients.map((c) => ({ device_id: id, client_id: resolveClient(c.name).id, percentage: c.percentage })),
         );
         if (insC.error) { messages.push(`✗ ${m.cfg.name} – клиенти: ${insC.error.message}`); continue; }
-        messages.push(`✓ ${m.cfg.name}: ${fmtNum(m.cfg.value)}`);
+        messages.push(`✓ ${m.cfg.name}: ${quantityLabel(m.cfg)}`);
       }
     }
     const realId = (id: string) => (id.startsWith(NEW_PREFIX) ? createdIds.get(id.slice(NEW_PREFIX.length)) ?? null : id);
@@ -281,14 +285,14 @@ export function ExcelConfigPanel({ devices, readings, clients, deviceDependencie
 
       {manualEnabled && (
         <section className="mb-6">
-          <h3 className="mb-2 text-sm font-semibold text-slate-700">Ръчни уреди (фиксирани количества от Excel)</h3>
+          <h3 className="mb-2 text-sm font-semibold text-slate-700">Нови уреди (ръчни количества и главен промишлен водомер)</h3>
           <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-100 bg-slate-50/50 text-left text-xs font-medium text-slate-500">
                   <th className="px-4 py-3">Уред</th>
                   <th className="px-4 py-3">Състояние</th>
-                  <th className="px-4 py-3 text-right">Количество 09.2026</th>
+                  <th className="px-4 py-3 text-right">Количество / показания</th>
                   <th className="px-4 py-3">Клиент</th>
                   <th className="px-4 py-3">Откъде</th>
                 </tr>
@@ -297,8 +301,8 @@ export function ExcelConfigPanel({ devices, readings, clients, deviceDependencie
                 {manualPlan.map((m) => (
                   <tr key={m.cfg.name}>
                     <td className="px-4 py-3 font-medium text-slate-700">{m.cfg.name}</td>
-                    <td className="px-4 py-3 text-slate-500">{m.existingId ? 'съществува' : 'ще бъде създаден'}</td>
-                    <td className="px-4 py-3 text-right font-mono tabular-nums">{fmtNum(m.cfg.value)} kWh</td>
+                    <td className="px-4 py-3 text-slate-500">{m.existingId ? 'съществува' : 'ще бъде създаден'}{m.cfg.meterReadings ? ' · с брояч' : ' · ръчен'}</td>
+                    <td className="px-4 py-3 text-right font-mono tabular-nums">{quantityLabel(m.cfg)} {m.like?.unit ?? ''}</td>
                     <td className="px-4 py-3 text-slate-800">{m.cfg.clients.map((c) => `${c.name} ${fmtPct(c.percentage)}`).join('; ')}</td>
                     <td className="px-4 py-3 text-xs text-slate-500">{m.cfg.note}</td>
                   </tr>
