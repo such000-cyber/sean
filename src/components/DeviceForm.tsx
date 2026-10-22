@@ -22,6 +22,7 @@ export function DeviceForm({ device, companies, locations, allDevices, deviceDep
   const [coefficient, setCoefficient] = useState('1');
   const [isBase, setIsBase] = useState(false);
   const [isManual, setIsManual] = useState(false);
+  const [priceGroup, setPriceGroup] = useState('');
   const [location, setLocation] = useState('');
   const [color, setColor] = useState(DEVICE_COLORS[0]);
   const [companyId, setCompanyId] = useState<string>('');
@@ -40,6 +41,7 @@ export function DeviceForm({ device, companies, locations, allDevices, deviceDep
       setCoefficient(String(Number(device.coefficient).toFixed(5).replace(/\.?0+$/, '')));
       setIsBase(device.is_base);
       setIsManual(!!device.is_manual);
+      setPriceGroup(device.price_group ?? '');
       setLocation(device.location ?? '');
       setColor(device.color);
       setCompanyId(device.company_id ?? '');
@@ -54,6 +56,7 @@ export function DeviceForm({ device, companies, locations, allDevices, deviceDep
       setCoefficient('1');
       setIsBase(false);
       setIsManual(false);
+      setPriceGroup('');
       setLocation('');
       setColor(DEVICE_COLORS[0]);
       setCompanyId('');
@@ -86,6 +89,7 @@ export function DeviceForm({ device, companies, locations, allDevices, deviceDep
         is_base: isBase,
         // полето се изпраща само ако е включено или вече съществува (за да работи и преди миграцията)
         ...(isManual || device?.is_manual !== undefined ? { is_manual: isManual } : {}),
+        ...(priceGroup.trim() || device?.price_group !== undefined ? { price_group: priceGroup.trim() || null } : {}),
         location: location.trim() || null,
         location_id: locationId || null,
         company_id: companyId || null,
@@ -285,6 +289,24 @@ export function DeviceForm({ device, companies, locations, allDevices, deviceDep
               Ръчен уред (без брояч)
             </label>
             <p className="-mt-2 mb-4 text-xs text-slate-400">Всеки месец се въвежда направо потреблението (напр. чилър 1640 kWh), а не показание на брояч. Коефициентът не се прилага.</p>
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-slate-700">Ценова група (абонат)</label>
+            <input
+              type="text"
+              list="price-group-options"
+              value={priceGroup}
+              onChange={(e) => setPriceGroup(e.target.value)}
+              placeholder="напр. Аб. 95308012 или Промишлена вода"
+              className="w-full rounded-lg border border-slate-200 px-3.5 py-2.5 text-sm text-slate-900 transition-colors placeholder:text-slate-400 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100"
+            />
+            <datalist id="price-group-options">
+              {Array.from(new Set(allDevices.map((d) => d.price_group).filter((g): g is string => !!g))).sort().map((g) => (
+                <option key={g} value={g} />
+              ))}
+            </datalist>
+            <p className="mt-1 text-xs text-slate-400">Уредът се оценява по фактурите със същата група. Празно = общата цена за локацията.</p>
           </div>
 
           <div>

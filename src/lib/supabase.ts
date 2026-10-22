@@ -59,6 +59,8 @@ export interface Device {
   is_base: boolean;
   /** Уред без брояч: показанието за месеца е самото потребление. Може да липсва, ако миграцията не е приложена. */
   is_manual?: boolean;
+  /** Ценова група (напр. абонат „Аб. 95308012“ или „Промишлена вода“). Може да липсва преди миграцията. */
+  price_group?: string | null;
   color: string;
   company_id: string | null;
   sort_order: number;
@@ -139,6 +141,8 @@ export interface SupplierInvoice {
   vat_amount: number;
   total_amount: number;
   note: string | null;
+  /** Ценова група – фактурата се отнася само за уредите със същата група. */
+  price_group?: string | null;
   created_at: string;
 }
 

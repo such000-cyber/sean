@@ -39,6 +39,9 @@ function friendlyDbError(message: string): string {
   if (/adjustment|is_manual/.test(message) && /column|schema cache/i.test(message)) {
     return 'Полетата „корекция“ / „ръчен уред“ още не са добавени в базата. В чата на Bolt напишете: „Apply the migration supabase/migrations/20261022090000_add_manual_devices_and_adjustments.sql“.';
   }
+  if (/price_group/.test(message) && /column|schema cache/i.test(message)) {
+    return 'Полето „ценова група“ още не е добавено в базата. В чата на Bolt напишете: „Apply the migration supabase/migrations/20261022110000_add_price_groups.sql“.';
+  }
   return message;
 }
 
@@ -660,7 +663,8 @@ function AppContent() {
   };
 
   // Supplier invoice CRUD
-  const handleSaveSupplierInvoice = async (supplierId: string, data: { invoice_number: string; invoice_date: string; service_month: string; quantity: number; unit: string; amount: number; vat_amount: number; total_amount: number; note: string | null; id?: string }) => {
+  const handleSaveSupplierInvoice = async (supplierId: string, data: { invoice_number: string; invoice_date: string; service_month: string; quantity: number; unit: string; amount: number; vat_amount: number; total_amount: number; note: string | null; price_group?: string | null; id?: string }) => {
+    const groupPart = data.price_group !== undefined ? { price_group: data.price_group } : {};
     if (data.id) {
       const { error } = await supabase
         .from('supplier_invoices')
@@ -674,15 +678,16 @@ function AppContent() {
           vat_amount: data.vat_amount,
           total_amount: data.total_amount,
           note: data.note,
+          ...groupPart,
         })
         .eq('id', data.id);
-      if (error) throw error;
+      if (error) throw new Error(friendlyDbError(error.message));
     } else {
       const { error } = await supabase.from('supplier_invoices').insert({
         supplier_id: supplierId,
         ...data,
       });
-      if (error) throw error;
+      if (error) throw new Error(friendlyDbError(error.message));
     }
     await refreshAll();
   };
@@ -1090,6 +1095,8 @@ function AppContent() {
             clients={clients}
             deviceDependencies={deviceDependencies}
             deviceClients={deviceClients}
+            suppliers={suppliers}
+            supplierInvoices={supplierInvoices}
             onDone={refreshAll}
             onBack={() => setView('dashboard')}
           />
