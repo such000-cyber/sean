@@ -7,11 +7,136 @@
 export const EXCEL_CONFIG_COMPANY_ID = '52ed2e37-1ecc-4026-94d6-17f52ee5fb36';
 
 export interface DeviceRef { name: string; number?: string }
+export interface ManualDeviceConfig {
+  /** име на новия ръчен уред (създава се, ако липсва) */
+  name: string;
+  /** от този уред се копират фирма, локация, тип и мерна единица */
+  likeDevice: DeviceRef;
+  /** потребление за месеца */
+  value: number;
+  clients: { name: string; percentage: number }[];
+  note: string;
+}
+
+export interface AdjustmentConfig {
+  device: DeviceRef;
+  value: number;
+  note: string;
+}
+
 export interface ExcelConfigItem {
   device: DeviceRef;
   subtracts?: DeviceRef[];
   clients?: { name: string; percentage: number }[];
 }
+
+export const EXCEL_CONFIG_MONTH = '2026-09-01';
+
+/** Ръчни уреди (фиксирани количества от Excel). Изискват миграцията за is_manual. */
+export const EXCEL_MANUAL_DEVICES_09_2026: ManualDeviceConfig[] = [
+  {
+    "name": "Сграда 34 - Чилър КНС (ръчно)",
+    "likeDevice": {
+      "name": "Сграда 34 - Електромер N1 - T1"
+    },
+    "value": 1640,
+    "clients": [
+      {
+        "name": "КНС-КЕРИЕР НЕТУЪРК СЪЛЮШЪН ЕАД",
+        "percentage": 100
+      }
+    ],
+    "note": "Excel: Електромер 13, ред 58 (чилър), изважда се от главното табло 0036"
+  },
+  {
+    "name": "Сграда 34 - Сървър МСК (ръчно)",
+    "likeDevice": {
+      "name": "Сграда 34 - Електромер N1 - T1"
+    },
+    "value": 200,
+    "clients": [
+      {
+        "name": "МСК ЕАД",
+        "percentage": 100
+      }
+    ],
+    "note": "Excel: Електромер 13, ред 49, изважда се от КНС"
+  },
+  {
+    "name": "Сграда 33 - Евротранспорт (ръчно)",
+    "likeDevice": {
+      "name": "Сграда 33 - Електромер N1 - 78"
+    },
+    "value": 630,
+    "clients": [
+      {
+        "name": "ЕВРОТРАНСПОРТ 2000 ЕООД",
+        "percentage": 100
+      }
+    ],
+    "note": "Excel: Електромер 39, ред 13, изважда се от приемна 0033"
+  },
+  {
+    "name": "Сграда 35 - Паркинг зарядни Смарт (ръчно)",
+    "likeDevice": {
+      "name": "Сграда 35 - Електромер N4 - 0"
+    },
+    "value": 91.7,
+    "clients": [
+      {
+        "name": "Смарт Менидж",
+        "percentage": 100
+      }
+    ],
+    "note": "Excel: Електромер 39, ред 12"
+  },
+  {
+    "name": "Сграда 38 - Зарядни станции БСМ (ръчно)",
+    "likeDevice": {
+      "name": "Сграда 38 - Електромер N4 - Т2"
+    },
+    "value": 114,
+    "clients": [
+      {
+        "name": "Балкан Стар Мотърс ЕООД",
+        "percentage": 100
+      }
+    ],
+    "note": "Excel: Електромер 39, ред 31"
+  }
+];
+
+/** Корекции към показанията за месеца. Изискват миграцията за adjustment. */
+export const EXCEL_ADJUSTMENTS_09_2026: AdjustmentConfig[] = [
+  {
+    "device": {
+      "name": "Сграда 33 - Електромер N1 - 78"
+    },
+    "value": -427,
+    "note": "Excel: Електромер 39!I4 −427"
+  },
+  {
+    "device": {
+      "name": "Сграда 35 - Електромер N8 - T2"
+    },
+    "value": 800,
+    "note": "Excel: Адмирал +450 +350"
+  },
+  {
+    "device": {
+      "name": "Сграда 35 - Електромер N9 - T2"
+    },
+    "value": -450,
+    "note": "Excel: Вимобайл −450"
+  },
+  {
+    "device": {
+      "name": "Сграда 35 - Електромер N11 - T2"
+    },
+    "value": -350,
+    "note": "Excel: Вимобайл −350"
+  }
+];
 
 export const EXCEL_CONFIG_09_2026: ExcelConfigItem[] = [
   {
@@ -170,6 +295,9 @@ export const EXCEL_CONFIG_09_2026: ExcelConfigItem[] = [
       },
       {
         "name": "Сграда 44 - Електромер N6 -"
+      },
+      {
+        "name": "Сграда 34 - Чилър КНС (ръчно)"
       }
     ],
     "clients": [
@@ -500,6 +628,11 @@ export const EXCEL_CONFIG_09_2026: ExcelConfigItem[] = [
         "name": "Балкан Стар Ритейл ЕООД",
         "percentage": 100
       }
+    ],
+    "subtracts": [
+      {
+        "name": "Сграда 33 - Евротранспорт (ръчно)"
+      }
     ]
   },
   {
@@ -560,5 +693,21 @@ export const EXCEL_CONFIG_09_2026: ExcelConfigItem[] = [
         "percentage": 40
       }
     ]
+  },
+  {
+    "device": {
+      "name": "Сграда 34 - Електромер N1 - T1"
+    },
+    "subtracts": [
+      {
+        "name": "Сграда 34 - Сървър МСК (ръчно)"
+      }
+    ]
+  },
+  {
+    "device": {
+      "name": "Сграда 34 - Електромер N1 - T2"
+    },
+    "subtracts": []
   }
 ];

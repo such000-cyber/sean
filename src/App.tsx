@@ -34,6 +34,14 @@ import { LoginPage } from '@/components/LoginPage';
 import { UserManagementPanel } from '@/components/UserManagementPanel';
 import { HelpPage } from '@/components/HelpPage';
 
+// Ако базата още няма новите полета (миграцията не е приложена), показваме ясно съобщение.
+function friendlyDbError(message: string): string {
+  if (/adjustment|is_manual/.test(message) && /column|schema cache/i.test(message)) {
+    return 'Полетата „корекция“ / „ръчен уред“ още не са добавени в базата. В чата на Bolt напишете: „Apply the migration supabase/migrations/20261022090000_add_manual_devices_and_adjustments.sql“.';
+  }
+  return message;
+}
+
 type View = 'dashboard' | 'detail' | 'monthly' | 'suppliers' | 'report' | 'compensation' | 'users' | 'help' | 'excelcfg';
 
 export default function App() {
@@ -459,11 +467,11 @@ function AppContent() {
     let deviceId: string;
     if (editingDevice) {
       const { error } = await supabase.from('devices').update(deviceData).eq('id', editingDevice.id);
-      if (error) throw error;
+      if (error) throw new Error(friendlyDbError(error.message));
       deviceId = editingDevice.id;
     } else {
       const { data: inserted, error } = await supabase.from('devices').insert(deviceData).select('id').single();
-      if (error) throw error;
+      if (error) throw new Error(friendlyDbError(error.message));
       deviceId = inserted.id;
     }
 
@@ -556,21 +564,25 @@ function AppContent() {
   };
 
   // Monthly entry save (inline upsert)
-  const handleSaveMonthlyReading = async (deviceId: string, readingDate: string, value: number, note: string | null, existingId?: string) => {
+  const handleSaveMonthlyReading = async (deviceId: string, readingDate: string, value: number, note: string | null, existingId?: string, adjustment = 0) => {
+    // Корекцията се изпраща само ако е различна от 0 или вече е имало такава за този месец,
+    // за да работи въвеждането и преди да е приложена миграцията за полето `adjustment`.
+    const existing = readings.find((r) => r.device_id === deviceId && r.reading_date === readingDate);
+    const adjPart = adjustment !== 0 || (existing?.adjustment ?? 0) !== 0 ? { adjustment } : {};
     if (existingId && existingId !== 'new') {
       const { error } = await supabase
         .from('readings')
-        .update({ reading_date: readingDate, value, raw_value: value, note })
+        .update({ reading_date: readingDate, value, raw_value: value, note, ...adjPart })
         .eq('id', existingId);
-      if (error) throw error;
+      if (error) throw new Error(friendlyDbError(error.message));
     } else {
       const { error } = await supabase
         .from('readings')
         .upsert(
-          { device_id: deviceId, reading_date: readingDate, value, raw_value: value, note },
+          { device_id: deviceId, reading_date: readingDate, value, raw_value: value, note, ...adjPart },
           { onConflict: 'device_id,reading_date' },
         );
-      if (error) throw error;
+      if (error) throw new Error(friendlyDbError(error.message));
     }
     await refreshAll();
   };
@@ -1074,6 +1086,7 @@ function AppContent() {
         <main className="px-4 py-6 sm:px-6 lg:px-8">
           <ExcelConfigPanel
             devices={devices}
+            readings={readings}
             clients={clients}
             deviceDependencies={deviceDependencies}
             deviceClients={deviceClients}

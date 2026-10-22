@@ -21,6 +21,7 @@ export function DeviceForm({ device, companies, locations, allDevices, deviceDep
   const [inventoryNumber, setInventoryNumber] = useState('');
   const [coefficient, setCoefficient] = useState('1');
   const [isBase, setIsBase] = useState(false);
+  const [isManual, setIsManual] = useState(false);
   const [location, setLocation] = useState('');
   const [color, setColor] = useState(DEVICE_COLORS[0]);
   const [companyId, setCompanyId] = useState<string>('');
@@ -38,6 +39,7 @@ export function DeviceForm({ device, companies, locations, allDevices, deviceDep
       setInventoryNumber(device.inventory_number ?? '');
       setCoefficient(String(Number(device.coefficient).toFixed(5).replace(/\.?0+$/, '')));
       setIsBase(device.is_base);
+      setIsManual(!!device.is_manual);
       setLocation(device.location ?? '');
       setColor(device.color);
       setCompanyId(device.company_id ?? '');
@@ -51,6 +53,7 @@ export function DeviceForm({ device, companies, locations, allDevices, deviceDep
       setInventoryNumber('');
       setCoefficient('1');
       setIsBase(false);
+      setIsManual(false);
       setLocation('');
       setColor(DEVICE_COLORS[0]);
       setCompanyId('');
@@ -81,6 +84,8 @@ export function DeviceForm({ device, companies, locations, allDevices, deviceDep
         inventory_number: inventoryNumber.trim() || null,
         coefficient: coefVal,
         is_base: isBase,
+        // полето се изпраща само ако е включено или вече съществува (за да работи и преди миграцията)
+        ...(isManual || device?.is_manual !== undefined ? { is_manual: isManual } : {}),
         location: location.trim() || null,
         location_id: locationId || null,
         company_id: companyId || null,
@@ -260,6 +265,26 @@ export function DeviceForm({ device, companies, locations, allDevices, deviceDep
               Базов уред (ръчна цена)
             </label>
             <p className="-mt-2 mb-4 text-xs text-slate-400">Маркирайте за уреди с фиксирана цена (напр. вода база), вместо цена от доставчик</p>
+          </div>
+
+          <div>
+            <label className="mb-3 flex items-center gap-3 text-sm font-medium text-slate-700">
+              <button
+                type="button"
+                onClick={() => setIsManual(!isManual)}
+                className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                  isManual ? 'bg-sky-500' : 'bg-slate-200'
+                }`}
+              >
+                <span
+                  className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
+                    isManual ? 'translate-x-4.5' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+              Ръчен уред (без брояч)
+            </label>
+            <p className="-mt-2 mb-4 text-xs text-slate-400">Всеки месец се въвежда направо потреблението (напр. чилър 1640 kWh), а не показание на брояч. Коефициентът не се прилага.</p>
           </div>
 
           <div>

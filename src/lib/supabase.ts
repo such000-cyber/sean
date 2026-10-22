@@ -57,6 +57,8 @@ export interface Device {
   location: string | null;
   location_id: string | null;
   is_base: boolean;
+  /** Уред без брояч: показанието за месеца е самото потребление. Може да липсва, ако миграцията не е приложена. */
+  is_manual?: boolean;
   color: string;
   company_id: string | null;
   sort_order: number;
@@ -70,6 +72,8 @@ export interface Reading {
   reading_date: string;
   value: number;
   raw_value: number | null;
+  /** Корекция към потреблението за месеца (+/−), след коефициента. Може да липсва, ако миграцията не е приложена. */
+  adjustment?: number | null;
   note: string | null;
   created_at: string;
 }

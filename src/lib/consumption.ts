@@ -3,7 +3,8 @@ import type { Device, Reading, DeviceDependency } from './supabase';
 /**
  * Изчисляване на консумацията по същата логика като в месечните Excel справки:
  *
- *   бруто(уред)  = (текущо показание − предишно показание) × коефициент на уреда
+ *   бруто(уред)  = (текущо показание − предишно показание) × коефициент на уреда + корекция за месеца
+ *                  (за ръчен уред: въведеното количество за месеца + корекция)
  *   нето(уред)   = бруто(уред) − Σ бруто(подуред)   за всички уреди, които той изважда
  *
  * Нетото се разпределя по клиентите на уреда в проценти.
@@ -40,16 +41,28 @@ export interface GrossConsumption {
   previous: Reading;
   /** разлика в показанията, без коефициент */
   delta: number;
-  /** разлика × коефициент */
+  /** корекция за месеца (+/−) */
+  adjustment: number;
+  /** разлика × коефициент + корекция */
   consumption: number;
 }
 
-/** Бруто консумация на уред за месец (reading_date = YYYY-MM-01). null ако липсва текущо или предишно показание. */
+/**
+ * Бруто консумация на уред за месец (reading_date = YYYY-MM-01).
+ *  - обикновен уред: (текущо − предишно) × коефициент + корекция за месеца
+ *  - ръчен уред (is_manual): въведената стойност за месеца + корекция
+ * null ако липсва нужното показание.
+ */
 export function grossConsumption(device: Device, monthDate: string, index: ReadingIndex): GrossConsumption | null {
   const list = index.byDevice.get(device.id);
   if (!list) return null;
   const current = list.find((r) => r.reading_date === monthDate);
   if (!current) return null;
+  const adjustment = Number(current.adjustment ?? 0) || 0;
+  if (device.is_manual) {
+    const v = rawReadingValue(current);
+    return { current, previous: current, delta: v, adjustment, consumption: round3(v + adjustment) };
+  }
   let previous: Reading | null = null;
   for (const r of list) {
     if (r.reading_date < monthDate) previous = r;
@@ -58,7 +71,7 @@ export function grossConsumption(device: Device, monthDate: string, index: Readi
   if (!previous) return null;
   const delta = rawReadingValue(current) - rawReadingValue(previous);
   const coef = Number(device.coefficient ?? 1);
-  return { current, previous, delta, consumption: round3(delta * coef) };
+  return { current, previous, delta, adjustment, consumption: round3(delta * coef + adjustment) };
 }
 
 export interface NetConsumption {
