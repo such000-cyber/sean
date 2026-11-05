@@ -44,6 +44,13 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   }, []);
 
+  // Показанията за предходния месец все още могат да се въвеждат (късно получени данни)
+  const editableFromMonth = useMemo(() => {
+    const now = new Date();
+    const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
+  }, []);
+
   const [month, setMonth] = useState(currentMonthStr);
   const [rows, setRows] = useState<Record<string, RowData>>({});
   const [saving, setSaving] = useState<Record<string, boolean>>({});
@@ -391,7 +398,7 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
         <p className="mt-1 text-sm text-slate-500">
           {monthLabel} · {filteredDevices.length} уреда · {filledCount} въведени
           {dirtyCount > 0 && <span className="text-amber-600"> · {dirtyCount} незапазени</span>}
-          {month < currentMonthStr && <span className="text-slate-400"> · само за преглед</span>}
+          {month < editableFromMonth && <span className="text-slate-400"> · само за преглед</span>}
         </p>
       </div>
 
@@ -452,7 +459,7 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
                     const compName = companyName(device.company_id);
                     const isSaving = saving[device.id];
                     const justSaved = savedFlash === device.id;
-                    const isPastMonth = month < currentMonthStr;
+                    const isPastMonth = month < editableFromMonth;
 
                     const iconForType = device.type === 'electricity' ? 'Zap' : device.type === 'water' ? 'Droplets' : device.type === 'gas' ? 'Flame' : device.type === 'heat' ? 'Thermometer' : 'Gauge';
 
