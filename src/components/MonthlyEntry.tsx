@@ -466,15 +466,20 @@ export function MonthlyEntry({ devices, readings, companies, clients, deviceClie
                     return (
                       <>
                         <tr key={device.id} className={`transition-colors ${row.dirty ? 'bg-amber-50/30' : ''} ${justSaved ? 'bg-emerald-50/40' : ''} hover:bg-slate-50/50`}>
-                          <td className="sticky left-0 z-10 bg-white px-4 py-3 shadow-[1px_0_0_0_theme(colors.slate.100)]">
+                          <td className={`sticky left-0 z-10 bg-white px-4 py-3 shadow-[1px_0_0_0_theme(colors.slate.100)] ${isManual ? 'border-l-4 border-teal-500' : ''}`}>
                             <div className="flex items-center gap-2.5">
                               <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: device.color }} />
                               <div className="min-w-0 max-w-[15rem]">
-                                <p className="truncate font-medium text-slate-700" title={device.name}>{device.name}</p>
+                                <div className="flex min-w-0 items-center gap-2">
+                                  <p className="truncate font-medium text-slate-700" title={device.name}>{device.name}</p>
+                                  {isManual && (
+                                    <span className="shrink-0 rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-teal-700 ring-1 ring-inset ring-teal-200">Ръчен</span>
+                                  )}
+                                </div>
                                 <div className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs text-slate-400">
                                   <Icon name={iconForType} size={11} />
                                   <span>{device.unit}</span>
-                                  {isManual && <span className="text-violet-500">· ръчно количество</span>}
+                                  {isManual && <span className="text-teal-600">· ръчно количество</span>}
                                   {!isManual && device.coefficient !== 1 && <span>· коеф. {device.coefficient}</span>}
                                   {compName && <span className="truncate">· {compName}</span>}
                                   {depDevices.length > 0 && (
