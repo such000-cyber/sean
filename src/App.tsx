@@ -146,9 +146,20 @@ function AppContent() {
   }, []);
 
   const fetchReadings = useCallback(async () => {
-    const { data, error } = await supabase.from('readings').select('*').order('reading_date', { ascending: true });
-    if (error) throw error;
-    return data as Reading[];
+    const pageSize = 1000;
+    const all: Reading[] = [];
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await supabase
+        .from('readings')
+        .select('*')
+        .order('reading_date', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) throw error;
+      all.push(...(data as Reading[]));
+      if (data.length < pageSize) break;
+    }
+    return all;
   }, []);
 
   const fetchCompanies = useCallback(async () => {
